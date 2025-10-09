@@ -1,0 +1,20 @@
+{
+  "name": "temporal-ai-chat",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "start:backend": "npm run start -w backend",
+    "start:worker": "npm run start:worker -w backend",
+    "start:frontend": "npm run dev -w frontend",
+    "start": "run-p start:backend start:frontend",
+    "start:all": "run-p start:backend start:worker start:frontend",
+    "build": "npm run build -w backend && npm run build -w frontend"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5"
+  }
+}

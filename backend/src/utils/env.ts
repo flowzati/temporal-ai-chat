@@ -1,0 +1,35 @@
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+// 加載並驗證後端所需的環境變數
+export type AppConfig = {
+  port: number; // 伺服器監聽的埠號
+  temporalAddress: string; // Temporal 叢集位址 (host:port)
+  temporalNamespace: string; // Temporal 命名空間
+  openaiApiKey: string; // OpenAI API 金鑰
+};
+
+export function loadConfig(): AppConfig {
+  const portStr = process.env.PORT ?? '4000';
+  const temporalAddress = process.env.TEMPORAL_ADDRESS ?? '127.0.0.1:7233';
+  const temporalNamespace = process.env.TEMPORAL_NAMESPACE ?? 'default';
+  const openaiApiKey = process.env.OPENAI_API_KEY ?? '';
+
+  // 缺少金鑰直接拋錯，避免在執行時期才發生問題
+  if (!openaiApiKey) {
+    throw new Error('OPENAI_API_KEY is required');
+  }
+
+  const port = Number(portStr);
+  if (!Number.isFinite(port) || port <= 0) {
+    throw new Error(`Invalid PORT: ${portStr}`);
+  }
+
+  return {
+    port,
+    temporalAddress,
+    temporalNamespace,
+    openaiApiKey,
+  };
+}
