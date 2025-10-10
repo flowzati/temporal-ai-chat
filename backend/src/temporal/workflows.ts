@@ -45,7 +45,6 @@ export interface QueueItem {
   userMessage: string;
   completion: Trigger<string>;
   userId: string;
-  resolved: boolean;
   sessionId: string;
 }
 
@@ -53,24 +52,41 @@ export interface QueueItem {
 export const sendMessageUpdate = defineUpdate<string, [SendMessageArgs]>('sendMessage');
 // 定義 Update：確認記帳
 export const confirmLedgerUpdate = defineUpdate<string, [ConfirmLedgerArgs]>('confirmLedger');
+// 定義 Signal：取消訊號
 export const cancelSignal = defineSignal('cancel');
+
+async function handleChat(item: QueueItem) {
+  const reply = await acts.chatReply({ userMessage: item.userMessage });
+  item.completion.resolve(reply);
+}
+
+async function handleWeather(item: QueueItem) {
+  const reply = await acts.weatherReply({ userMessage: item.userMessage });
+  item.completion.resolve(reply);
+}
+
+async function handleLedgerProposal(item: QueueItem) {
+  const ledger = await acts.parseLedgerProposal({ userId: item.userId, sessionId: item.sessionId, text: item.userMessage, nowMs: Date.now() });
+  const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
+  item.completion.resolve(payload);
+}
+
+async function handleLedgerQuery(item: QueueItem) {
+  const ledger = await acts.queryLedgerRange({ userId: item.userId, text: item.userMessage, nowMs: Date.now() });
+  item.completion.resolve(ledger.resultText);
+}
+
 
 // Entity 風格的長駐工作流：每個 sessionId 對應一個工作流實體
 export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<void> {
   // 執行期佇列：Update 只入列，主循環負責出列處理
   const pendingQueue: QueueItem[] = [];
-  const MAX_QUEUE = 100; // 簡單背壓：避免佇列過長
-  let cancelled = false;
   let currentScope: CancellationScope | null = null;
-  let currentItem: QueueItem | null = null;
 
   // Update：將訊息入列並等待主循環處理結果（以 Trigger 實現 deferred）
   setHandler(sendMessageUpdate, async (args: SendMessageArgs): Promise<string> => {
-    if (pendingQueue.length >= MAX_QUEUE) {
-      return '系統忙碌中，請稍後再試';
-    }
     const completion = new Trigger<string>();
-    pendingQueue.push({ userMessage: args.userMessage, completion, userId: args.userId, resolved: false, sessionId: startArgs.sessionId });
+    pendingQueue.push({ userMessage: args.userMessage, completion, userId: args.userId, sessionId: startArgs.sessionId });
     return await completion;
   });
 
@@ -81,43 +97,9 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
 
   // 取消訊號：將當前佇列中的請求標記為取消
   setHandler(cancelSignal, () => {
-    cancelled = true;
-    // 立即嘗試標記目前處理中的項目為已取消，避免後續重複 resolve
-    if (currentItem && !currentItem.resolved) {
-      currentItem.resolved = true;
-      currentItem.completion.resolve('已取消');
-    }
     // 取消當前作用域，讓等待中的 Activity/計時器立即拋出取消錯誤
     currentScope?.cancel();
   });
-
-  // Consolidated handlers：將各分支處理封裝，便於擴充與測試
-  function safeResolve(item: QueueItem, value: string) {
-    if (item.resolved) return;
-    item.resolved = true;
-    item.completion.resolve(value);
-  }
-
-  async function handleChat(item: QueueItem) {
-    const reply = await acts.chatReply({ userMessage: item.userMessage });
-    item.completion.resolve(reply);
-  }
-
-  async function handleWeather(item: QueueItem) {
-    const reply = await acts.weatherReply({ userMessage: item.userMessage });
-    item.completion.resolve(reply);
-  }
-
-  async function handleLedgerProposal(item: QueueItem) {
-    const ledger = await acts.parseLedgerProposal({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
-    const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
-    item.completion.resolve(payload);
-  }
-
-  async function handleLedgerQuery(item: QueueItem) {
-    const ledger = await acts.queryLedgerRange({ userId: item.userId, text: item.userMessage, nowMs: Date.now() });
-    item.completion.resolve(ledger.resultText);
-  }
 
   // 初始化：可記錄初始搜尋屬性（目前關閉，保留示例）
   // await upsertSearchAttributes({
@@ -136,10 +118,10 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     // 處理佇列（FIFO）
     while (pendingQueue.length > 0) {
       const item = pendingQueue.shift()!;
-      currentItem = item;
       // 由 OpenAI 決策選擇功能：chat / weather / ledger_proposal / ledger_query（集中式路由）
       try {
-        await (currentScope = new CancellationScope()).run(async () => {
+        currentScope = new CancellationScope();
+        await currentScope.run(async () => {
           const capability = await acts.decideCapability({ text: item.userMessage });
           if (capability === 'weather') {
             await handleWeather(item);
@@ -156,20 +138,18 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
           await handleChat(item);
         });
       } catch (err: any) {
-        if (isCancellation(err) || cancelled) {
-          safeResolve(item, '已取消');
-          cancelled = false;
+        if (isCancellation(err)) {
+          item.completion.resolve('已取消');
           continue;
         }
         const msg = String(err?.message ?? '');
         if (msg.includes('Not a ledger') || msg.includes('Invalid date') || msg.includes('Unsupported range')) {
-          safeResolve(item, `處理失敗：${msg}`);
+          item.completion.resolve(`處理失敗：${msg}`);
           continue;
         }
         throw err;
       } finally {
         currentScope = null;
-        currentItem = null;
       }
     }
 

@@ -27,6 +27,7 @@ export function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'system', content: '歡迎使用 Temporal AI Chat。' },
   ]);
+  const [waitingReply, setWaitingReply] = useState(false);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const messagesBoxRef = useRef<HTMLDivElement | null>(null);
@@ -49,6 +50,7 @@ export function App() {
       try {
         const data = JSON.parse(String(evt.data));
         if (data?.type === 'assistant_message') {
+          setWaitingReply(false);
           // 嘗試解析是否為 ledger_proposal
           try {
             const parsed = JSON.parse(String(data.message));
@@ -60,9 +62,14 @@ export function App() {
           } catch {}
           setMessages((prev) => [...prev, { role: 'assistant', content: data.message }]);
         } else if (data?.type === 'error') {
+          setWaitingReply(false);
           setMessages((prev) => [...prev, { role: 'system', content: `錯誤：${data.error}` }]);
+        } else if (data?.type === 'assistant_message' && typeof data.message === 'string' && data.message.includes('已取消')) {
+          // 保險：若後端取消訊息路由不同步，此處也確保解鎖按鈕
+          setWaitingReply(false);
         }
       } catch (e) {
+        setWaitingReply(false);
         setMessages((prev) => [...prev, { role: 'system', content: '伺服器回傳格式錯誤' }]);
       }
     };
@@ -115,7 +122,7 @@ export function App() {
   }, [messages]);
 
   // 僅在連線且輸入不為空時允許送出
-  const canSend = useMemo(() => connected && input.trim().length > 0, [connected, input]);
+  const canSend = useMemo(() => connected && input.trim().length > 0 && !waitingReply, [connected, input, waitingReply]);
 
   // 送出使用者訊息給後端，後端會啟動工作流處理
   function sendMessage() {
@@ -129,10 +136,11 @@ export function App() {
     wsRef.current.send(JSON.stringify(payload));
     setMessages((prev) => [...prev, { role: 'user', content: input.trim() }]);
     setInput('');
+    setWaitingReply(true);
   }
 
   function cancelAll() {
-    if (!wsRef.current) return;
+    if (!wsRef.current || !waitingReply) return;
     const payload = {
       type: 'cancel',
       sessionId,
@@ -266,6 +274,7 @@ export function App() {
             placeholder="輸入訊息..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            disabled={!connected || waitingReply}
             onCompositionStart={() => {
               composingRef.current = true;
             }}
@@ -282,10 +291,10 @@ export function App() {
               }
             }}
           />
-          <button onClick={sendMessage} disabled={!canSend}>
+          <button onClick={sendMessage} disabled={!canSend} title={waitingReply ? '等待回覆中' : '送出訊息'}>
             送出
           </button>
-          <button onClick={cancelAll} disabled={!connected} title="取消當前/排隊中的處理">
+          <button onClick={cancelAll} disabled={!connected || !waitingReply} title={waitingReply ? '取消當前處理' : '等待回覆時才可取消'}>
             取消
           </button>
         </div>
