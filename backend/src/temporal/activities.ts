@@ -3,10 +3,9 @@ import { Agent, run } from '@openai/agents';
 import { setDefaultOpenAIKey } from '@openai/agents-openai';
 import { insertLedgerEntry, listLedgerEntriesByRange } from '../utils/db';
 import { computeLedgerRange, formatLedgerSummary, buildLedgerProposalFields, LedgerRangeInput } from '../utils/ledger';
+import { ParsedLedgerProposalFlat, Capability, SendMessageArgs } from '../types';
 
-export interface ChatReplyArgs {
-  userMessage: string;
-}
+// Removed ChatReplyArgs; use plain string parameters
 
 const EnvSchema = z.object({
   OPENAI_API_KEY: z.string().min(1),
@@ -21,8 +20,7 @@ function ensureOpenAI() {
 }
 
 // 決策可用功能：聊天、查天氣、記帳、查帳
-export type Capability = 'chat' | 'weather' | 'ledger_proposal' | 'ledger_query';
-export async function decideCapability(args: { text: string }): Promise<Capability> {
+export async function decideCapability(text: string): Promise<Capability> {
   ensureOpenAI();
   const schema = z.object({ type: z.enum(['chat', 'weather', 'ledger_proposal', 'ledger_query']) });
   const agent = new Agent({
@@ -32,7 +30,7 @@ export async function decideCapability(args: { text: string }): Promise<Capabili
       '- 一般對話 → chat\n- 問天氣、氣溫、下雨、晴、°C → weather\n' +
       '- 記帳新增/扣除 → ledger_proposal\n- 查詢當日/昨日/特定日期/當月花費 → ledger_query',
   });
-  const out = await run(agent, args.text);
+  const out = await run(agent, text);
   try {
     const parsed = schema.parse(typeof out.finalOutput === 'string' ? JSON.parse(out.finalOutput) : out.finalOutput);
     return parsed.type;
@@ -42,20 +40,20 @@ export async function decideCapability(args: { text: string }): Promise<Capabili
 }
 
 // 使用 @openai/agents 產生回覆（在 worker 執行）
-export async function chatReply(args: ChatReplyArgs): Promise<string> {
+export async function chatReply(userMessage: string): Promise<string> {
   ensureOpenAI();
   const agent = new Agent({
     name: 'Chat Agent',
     instructions: '你是簡潔且有幫助的助理。',
   });
-  const result = await run(agent, args.userMessage);
+  const result = await run(agent, userMessage);
   const out = result.finalOutput;
   if (typeof out === 'string') return out;
   return '（助理沒有回覆文字）';
 }
 
 // 使用工具的 Agent（加入天氣查詢）
-export async function weatherReply(args: ChatReplyArgs): Promise<string> {
+export async function weatherReply(userMessage: string): Promise<string> {
   // 改為專責天氣回覆（不使用 tools）
   ensureOpenAI();
   const CitySchema = z.object({ city: z.string().min(1) });
@@ -63,7 +61,7 @@ export async function weatherReply(args: ChatReplyArgs): Promise<string> {
     name: 'City Extractor',
     instructions: '從使用者訊息中抽取欲查詢天氣的城市，只輸出 JSON:{"city":"Taipei"}；若無則 {"city":""}。',
   });
-  const raw = String((await run(extractor, args.userMessage)).finalOutput || '').trim();
+  const raw = String((await run(extractor, userMessage)).finalOutput || '').trim();
   let city = '';
   try {
     const parsed = CitySchema.safeParse(JSON.parse(raw));
@@ -99,7 +97,7 @@ export interface ParseLedgerProposalResult {
   explain: string;
 }
 
-export async function parseLedgerProposal(args: { userId: string; sessionId?: string | null; text: string; }): Promise<ParseLedgerProposalResult> {
+export async function parseLedgerProposal(args: SendMessageArgs): Promise<ParsedLedgerProposalFlat> {
   ensureOpenAI();
   // Use activity-time instead of workflow-time; determinism is preserved in workflow
   const now = new Date();
@@ -114,7 +112,7 @@ export async function parseLedgerProposal(args: { userId: string; sessionId?: st
       `\n今天日期為 ${now.toISOString().slice(0, 10)}，時間請盡量解析成 ISO 日期時間。` +
       '\n只輸出 JSON，勿加說明。',
   });
-  const raw = String((await run(agent, args.text)).finalOutput || '').trim();
+  const raw = String((await run(agent, args.userMessage)).finalOutput || '').trim();
   try {
     const parsed = JSON.parse(raw);
     if (parsed?.kind === 'add' || parsed?.kind === 'sub') {
@@ -132,7 +130,7 @@ export async function parseLedgerProposal(args: { userId: string; sessionId?: st
         occurredAtMs: built.occurredAtMs,
       };
       LedgerProposalSchema.parse(proposal);
-      return { proposal, explain: built.explain };
+      return { userId: proposal.userId, sessionId: proposal.sessionId, title: proposal.title, amountCents: proposal.amountCents, occurredAtMs: proposal.occurredAtMs, explain: built.explain };
     }
     throw new Error('Not a ledger proposal');
   } catch (err: any) {
@@ -140,7 +138,7 @@ export async function parseLedgerProposal(args: { userId: string; sessionId?: st
   }
 }
 
-export async function queryLedgerRange(args: { userId: string; text: string }): Promise<string> {
+export async function queryLedgerRange(args: SendMessageArgs): Promise<string> {
   ensureOpenAI();
   const now = new Date();
   const agent = new Agent({
@@ -151,7 +149,7 @@ export async function queryLedgerRange(args: { userId: string; text: string }): 
       `\n今天日期為 ${now.toISOString().slice(0, 10)}，時間請盡量解析成 ISO 日期時間。` +
       '\n只輸出 JSON，勿加說明。',
   });
-  const raw = String((await run(agent, args.text)).finalOutput || '').trim();
+  const raw = String((await run(agent, args.userMessage)).finalOutput || '').trim();
   try {
     const parsed = JSON.parse(raw);
     if (parsed?.kind === 'query') {
@@ -166,13 +164,13 @@ export async function queryLedgerRange(args: { userId: string; text: string }): 
   }
 }
 
-export async function saveLedger(args: { proposal: LedgerProposal }): Promise<string> {
+export async function saveLedger(proposal: LedgerProposal): Promise<string> {
   insertLedgerEntry({
-    userId: args.proposal.userId,
-    sessionId: args.proposal.sessionId ?? null,
-    title: args.proposal.title,
-    amountCents: args.proposal.amountCents,
-    occurredAtMs: args.proposal.occurredAtMs,
+    userId: proposal.userId,
+    sessionId: proposal.sessionId ?? null,
+    title: proposal.title,
+    amountCents: proposal.amountCents,
+    occurredAtMs: proposal.occurredAtMs,
     createdAtMs: Date.now(),
   });
   return '已存入記帳';
