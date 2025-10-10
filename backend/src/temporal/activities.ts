@@ -53,6 +53,7 @@ export async function generateReplyWithTools(args: GenerateReplyArgs): Promise<s
     parameters: WeatherParams,
     execute: async (input) => {
       const { city } = WeatherParams.parse(input);
+      console.log('weatherTool', input);
       const res = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1`).then((r) => r.json() as any);
       const weather = res?.current_condition?.[0];
       if (!weather) return `無法取得 ${city} 的天氣資訊`;
@@ -87,6 +88,7 @@ export async function decideUseTools(args: DecideUseToolsArgs): Promise<boolean>
 
   const result = await run(agent, args.userMessage);
   const out = String(result.finalOutput || '').trim().toLowerCase();
+  console.log('decideUseTools', out);
   if (out.includes('yes')) return true;
   if (out.includes('no')) return false;
   // 若無法判斷，保守回傳不使用工具
