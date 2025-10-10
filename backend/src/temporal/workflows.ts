@@ -56,26 +56,7 @@ export const confirmLedgerUpdate = defineUpdate<string, [ConfirmLedgerArgs]>('co
 // 定義 Signal：取消訊號
 export const cancelSignal = defineSignal('cancel');
 
-async function handleChat(item: QueueItem) {
-  const reply = await acts.chatReply({ userMessage: item.userMessage });
-  item.completion.resolve(reply);
-}
-
-async function handleWeather(item: QueueItem) {
-  const reply = await acts.weatherReply({ userMessage: item.userMessage });
-  item.completion.resolve(reply);
-}
-
-async function handleLedgerProposal(item: QueueItem) {
-  const ledger = await acts.parseLedgerProposal({ userId: item.userId, sessionId: item.sessionId, text: item.userMessage });
-  const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
-  item.completion.resolve(payload);
-}
-
-async function handleLedgerQuery(item: QueueItem) {
-  const ledger = await acts.queryLedgerRange({ userId: item.userId, text: item.userMessage });
-  item.completion.resolve(ledger.resultText);
-}
+// Inline dispatcher will handle all capabilities in-place
 
 
 // Entity 風格的長駐工作流：每個 sessionId 對應一個工作流實體
@@ -102,6 +83,34 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     currentScope?.cancel();
   });
   
+  async function dispatchByCapability(item: QueueItem): Promise<void> {
+    const capability = await acts.decideCapability({ text: item.userMessage });
+    switch (capability) {
+      case 'weather': {
+        const reply = await acts.weatherReply({ userMessage: item.userMessage });
+        item.completion.resolve(reply);
+        return;
+      }
+      case 'ledger_proposal': {
+        const ledger = await acts.parseLedgerProposal({ userId: item.userId, sessionId: item.sessionId, text: item.userMessage });
+        const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
+        item.completion.resolve(payload);
+        return;
+      }
+      case 'ledger_query': {
+        const ledger = await acts.queryLedgerRange({ userId: item.userId, text: item.userMessage });
+        item.completion.resolve(ledger.resultText);
+        return;
+      }
+      case 'chat':
+      default: {
+        const reply = await acts.chatReply({ userMessage: item.userMessage });
+        item.completion.resolve(reply);
+        return;
+      }
+    }
+  }
+
   // 保持工作流存活，等待更新（Updates）
   // 若要釋出資源，可設計閒置逾時後關閉或 ContinueAsNew
   // eslint-disable-next-line no-constant-condition
@@ -116,22 +125,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
       // 由 OpenAI 決策選擇功能：chat / weather / ledger_proposal / ledger_query（集中式路由）
       try {
         currentScope = new CancellationScope();
-        await currentScope.run(async () => {
-          const capability = await acts.decideCapability({ text: item.userMessage });
-          if (capability === 'weather') {
-            await handleWeather(item);
-            return;
-          }
-          if (capability === 'ledger_proposal') {
-            await handleLedgerProposal(item);
-            return;
-          }
-          if (capability === 'ledger_query') {
-            await handleLedgerQuery(item);
-            return;
-          }
-          await handleChat(item);
-        });
+        await currentScope.run(() => dispatchByCapability(item));
       } catch (err: any) {
         if (isCancellation(err)) {
           item.completion.resolve('已取消');
