@@ -1,13 +1,11 @@
 import { z } from 'zod';
 import { Agent, run, tool } from '@openai/agents';
 import { setDefaultOpenAIKey } from '@openai/agents-openai';
-import { insertLedgerEntry, sumLedgerEntriesByRange, listLedgerEntriesByRange, LedgerEntryRow } from '../utils/db';
+import { insertLedgerEntry, listLedgerEntriesByRange, LedgerEntryRow } from '../utils/db';
 
 export interface GenerateReplyArgs {
   userMessage: string;
 }
-
-// (removed) DecideUseToolsArgs — replaced by decideCapability
 
 const EnvSchema = z.object({
   OPENAI_API_KEY: z.string().min(1),

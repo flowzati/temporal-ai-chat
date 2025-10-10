@@ -3,6 +3,10 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // 加載並驗證後端所需的環境變數
+// - PORT：伺服器監聽埠
+// - TEMPORAL_ADDRESS / TEMPORAL_NAMESPACE：Temporal 叢集連線
+// - OPENAI_API_KEY：OpenAI 金鑰（activities 會使用）
+// - SQLITE_DB_PATH：SQLite 檔案路徑（預設 ./chat.db）
 export type AppConfig = {
   port: number; // 伺服器監聽的埠號
   temporalAddress: string; // Temporal 叢集位址 (host:port)

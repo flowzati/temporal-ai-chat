@@ -1,18 +1,24 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, upsertSearchAttributes, continueAsNew, workflowInfo, condition, Trigger } from '@temporalio/workflow';
+// 說明：本工作流採用 Entity/Virtual Actor 模式（每個 sessionId 對應一個長駐實體）。
+// - Workflow 僅負責決策與協調（決定性），所有 I/O 交由 Activities 執行（避免非決定性）。
+// - 以內存佇列 + condition 等待的方式串行處理訊息，確保順序與一致性。
 
-// 代理活動：定義可在工作流中呼叫的活動函式（會在 worker 上執行）
-const { generateReply, generateReplyWithTools, decideCapability, parseLedgerIntent, saveLedger } = proxyActivities<{
+export interface Activities {
+  decideCapability: (args: { text: string }) => Promise<'chat' | 'weather' | 'ledger_proposal' | 'ledger_query'>;
   generateReply: (args: { userMessage: string }) => Promise<string>;
   generateReplyWithTools: (args: { userMessage: string }) => Promise<string>;
-  decideCapability: (args: { text: string }) => Promise<'chat' | 'weather' | 'ledger_proposal' | 'ledger_query'>;
+  saveLedger: (args: { proposal: { userId: string; sessionId?: string | null; title: string; amountCents: number; occurredAtMs: number } }) => Promise<string>;
   parseLedgerIntent: (args: { userId: string; sessionId?: string | null; text: string; nowMs?: number }) => Promise<
     | { type: 'none' }
     | { type: 'proposal'; proposal: { userId: string; sessionId?: string | null; title: string; amountCents: number; occurredAtMs: number }; explain: string }
     | { type: 'query'; resultText: string }
   >;
-  saveLedger: (args: { proposal: { userId: string; sessionId?: string | null; title: string; amountCents: number; occurredAtMs: number } }) => Promise<string>;
-}>({
-  startToCloseTimeout: '2 minute',
+}
+
+// 代理活動：定義在 Worker 執行的函式（OpenAI、DB 存取等 I/O）
+const acts = proxyActivities<Activities>({
+  startToCloseTimeout: '1 minute',
+  retry: { maximumAttempts: 5, backoffCoefficient: 2 },
 });
 
 export interface StartSessionArgs {
@@ -28,18 +34,16 @@ export interface SendMessageArgs {
   startedAtMs: number; // 此次訊息的開始時間（決定性來源於伺服器）
 }
 
-// 可選：提供取消訊號（保留未用）
-export const cancelSignal = defineSignal('cancel');
+export interface ConfirmLedgerArgs {
+  userId: string; // 使用者 ID
+  sessionId: string; // 會話 ID
+  proposal: { title: string; amountCents: number; occurredAtMs: number }; // 記帳提案
+}
 
 // 定義 Update：單次訊息處理，回傳助理回覆（泛型順序為 <Return, [Args]>）
 export const sendMessageUpdate = defineUpdate<string, [SendMessageArgs]>('sendMessage');
-export const confirmLedgerUpdate = defineUpdate<string, [
-  {
-    userId: string;
-    sessionId: string;
-    proposal: { title: string; amountCents: number; occurredAtMs: number };
-  }
-]>('confirmLedger');
+// 定義 Update：確認記帳
+export const confirmLedgerUpdate = defineUpdate<string, [ConfirmLedgerArgs]>('confirmLedger');
 
 // Entity 風格的長駐工作流：每個 sessionId 對應一個工作流實體
 export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<void> {
@@ -50,7 +54,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   // 執行期佇列：Update 只入列，主循環負責出列處理
   const pendingQueue: { userMessage: string; completion: Trigger<string>; userId: string }[] = [];
 
-  // Helpers: recent buffer ops & unified finalize
+  // Helpers：維護最近訊息緩衝 & 統一回覆結束
   function addRecent(role: 'user' | 'assistant', content: string) {
     recentMessages.push({ role, content });
     if (recentMessages.length > MAX_RECENT) {
@@ -64,19 +68,19 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     item.completion.resolve(assistantContent);
   }
 
-  // Consolidated handlers
+  // Consolidated handlers：將各分支處理封裝，便於擴充與測試
   async function handleChat(item: { userMessage: string; completion: Trigger<string> }) {
-    const reply = await generateReply({ userMessage: item.userMessage });
+    const reply = await acts.generateReply({ userMessage: item.userMessage });
     finalize(item, reply);
   }
 
   async function handleWeather(item: { userMessage: string; completion: Trigger<string> }) {
-    const reply = await generateReplyWithTools({ userMessage: item.userMessage });
+    const reply = await acts.generateReplyWithTools({ userMessage: item.userMessage });
     finalize(item, reply);
   }
 
   async function handleLedgerProposal(item: { userMessage: string; completion: Trigger<string>; userId: string }) {
-    const ledger = await parseLedgerIntent({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
+    const ledger = await acts.parseLedgerIntent({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
     if (ledger.type === 'proposal') {
       const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
       finalize(item, payload);
@@ -86,7 +90,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   }
 
   async function handleLedgerQuery(item: { userMessage: string; completion: Trigger<string>; userId: string }) {
-    const ledger = await parseLedgerIntent({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
+    const ledger = await acts.parseLedgerIntent({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
     if (ledger.type === 'query') {
       finalize(item, ledger.resultText);
       return;
@@ -94,22 +98,22 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     await handleChat(item);
   }
 
-  // 初始化：可記錄初始搜尋屬性，以利後續查詢
+  // 初始化：可記錄初始搜尋屬性（目前關閉，保留示例）
   // await upsertSearchAttributes({
   //   SessionId: [startArgs.sessionId],
   //   StartedAt: [new Date(startArgs.startedAtMs)],
   // });
 
-  // 設定 Update：入列後等待主循環處理完成
+  // Update：將訊息入列並等待主循環處理結果（以 Trigger 實現 deferred）
   setHandler(sendMessageUpdate, async (args: SendMessageArgs): Promise<string> => {
     const completion = new Trigger<string>();
     pendingQueue.push({ userMessage: args.userMessage, completion, userId: args.userId });
     return await completion;
   });
 
-  // 確認記帳：直接執行（不入列），避免阻塞
+  // 確認記帳（Confirm）：直接呼叫 Activity 寫 DB，不入列避免阻塞緒列
   setHandler(confirmLedgerUpdate, async (args: { userId: string; sessionId: string; proposal: { title: string; amountCents: number; occurredAtMs: number } }): Promise<string> => {
-    const out = await saveLedger({ proposal: { userId: args.userId, sessionId: args.sessionId, title: args.proposal.title, amountCents: args.proposal.amountCents, occurredAtMs: args.proposal.occurredAtMs } });
+    const out = await acts.saveLedger({ proposal: { userId: args.userId, sessionId: args.sessionId, title: args.proposal.title, amountCents: args.proposal.amountCents, occurredAtMs: args.proposal.occurredAtMs } });
     // 更新小型緩衝
     addRecent('user', `確認記帳：${args.proposal.title}`);
     addRecent('assistant', out);
@@ -123,15 +127,15 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const info = workflowInfo();
-    // 等待：佇列有內容或建議 CAＮ
+    // 等待：佇列有內容或 Server 建議 ContinueAsNew（history 大小/長度門檻）
     await condition(() => pendingQueue.length > 0 || workflowInfo().continueAsNewSuggested);
 
     // 處理佇列（FIFO）
     while (pendingQueue.length > 0) {
       const item = pendingQueue.shift()!;
 
-      // 由 OpenAI 決策選擇功能：chat / weather / ledger_proposal / ledger_query
-      const capability = await decideCapability({ text: item.userMessage });
+      // 由 OpenAI 決策選擇功能：chat / weather / ledger_proposal / ledger_query（集中式路由）
+      const capability = await acts.decideCapability({ text: item.userMessage });
       switch (capability) {
         case 'chat':
           await handleChat(item);
@@ -150,6 +154,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     }
 
     if (info.continueAsNewSuggested) {
+      // 僅攜帶小型緩衝至新 run，避免 history 膨脹，提升重播效率
       return continueAsNew<typeof chatSessionWorkflow>({
         sessionId: startArgs.sessionId,
         startedAtMs: startArgs.startedAtMs,

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { Worker } from '@temporalio/worker';
 import * as activities from './temporal/activities';
+// Worker：掛載 workflows 與 activities，負責執行工作流任務與活動呼叫
 
 async function run() {
   const taskQueue = 'chat-ai'; // 工作佇列名稱，與啟動工作流時相同

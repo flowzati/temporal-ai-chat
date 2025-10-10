@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { loadConfig } from './env';
+// 說明：集中管理 SQLite 連線與遷移；提供 sessions/messages/ledger 的基本操作
 
 export type Db = Database.Database;
 
@@ -37,6 +38,10 @@ export function getDb(): Db {
 }
 
 function migrate(db: Db) {
+  // Schema：
+  // - sessions：會話清單（以 session_id 為主鍵）
+  // - messages：聊天訊息（依 session 排序）
+  // - ledger_entries：記帳明細（user 維度聚合，時間範圍查詢）
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id TEXT PRIMARY KEY,
