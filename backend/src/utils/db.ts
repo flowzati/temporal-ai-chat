@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { loadConfig } from './env';
+import { LedgerEntryRow } from '../types';
 // 說明：集中管理 SQLite 連線與遷移；提供 sessions/messages/ledger 的基本操作
 
 export type Db = Database.Database;
@@ -107,16 +108,6 @@ export function sessionExists(sessionId: string): boolean {
   return !!row;
 }
 
-// Ledger helpers
-export interface LedgerEntryRow {
-  id: number;
-  user_id: string;
-  session_id: string | null;
-  title: string;
-  amount_cents: number; // 正為加項，負為減項
-  occurred_at_ms: number;
-  created_at_ms: number;
-}
 
 export function insertLedgerEntry(params: {
   userId: string;

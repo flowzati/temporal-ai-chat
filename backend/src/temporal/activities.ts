@@ -1,8 +1,7 @@
-import { insertLedgerEntry } from '../utils/db';
-import { ParsedLedgerProposalFlat, Capability, SendMessageArgs, LedgerProposal } from '../types';
+import { ParsedLedgerProposalFlat, Capability, SendMessageArgs, LedgerProposal, LedgerQueryRangeResult, LedgerEntryRow } from '../types';
+import * as ledger from '../utils/ledger';
+import * as db from '../utils/db';
 import * as ai from '../services/ai';
-
-// Removed ChatReplyArgs; use plain string parameters
 
 // activities 僅作為輕薄代理，重邏輯在 services/ai.ts
 
@@ -35,7 +34,7 @@ export async function weatherReply(userMessage: string): Promise<string> {
 
 export async function parseLedgerProposal(args: SendMessageArgs): Promise<ParsedLedgerProposalFlat> {
   try {
-    return await ai.parseLedgerProposal(args);
+    return await ai.parseLedgerProposal(args.userMessage, args.userId, args.sessionId ?? null);
   } catch (err: any) {
     throw new Error(`parseLedgerProposal failed: ${err?.message ?? 'unknown error'}`);
   }
@@ -43,7 +42,9 @@ export async function parseLedgerProposal(args: SendMessageArgs): Promise<Parsed
 
 export async function queryLedgerRange(args: SendMessageArgs): Promise<string> {
   try {
-    return await ai.queryLedgerRange(args);
+    const range: LedgerQueryRangeResult = await ai.queryLedgerRange(args.userMessage);
+    const entries: LedgerEntryRow[] = db.listLedgerEntriesByRange(args.userId, range.startMs, range.endMs);
+    return ledger.formatLedgerSummary(entries, new Date(range.startMs), new Date(range.endMs));
   } catch (err: any) {
     throw new Error(`queryLedgerRange failed: ${err?.message ?? 'unknown error'}`);
   }
@@ -51,7 +52,7 @@ export async function queryLedgerRange(args: SendMessageArgs): Promise<string> {
 
 export async function saveLedger(proposal: LedgerProposal): Promise<string> {
   try {
-    insertLedgerEntry({
+    db.insertLedgerEntry({
       userId: proposal.userId,
       sessionId: proposal.sessionId ?? null,
       title: proposal.title,

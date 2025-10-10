@@ -39,6 +39,11 @@ export interface ParsedLedgerProposalFlat extends ChatBase {
   explain: string;
 }
 
+export interface LedgerQueryRangeResult {
+  startMs: number;
+  endMs: number;
+}
+
 // ===== Ledger: parse intent =====
 export const LedgerProposalSchema = z.object({
   userId: z.string().min(1),
@@ -55,3 +60,20 @@ export interface ParseLedgerProposalResult {
 }
 
 export type Capability = 'chat' | 'weather' | 'ledger_proposal' | 'ledger_query';
+
+export interface LedgerRangeInput {
+  range: 'today' | 'yesterday' | 'date' | 'month' | 'week';
+  date?: string; // YYYY-MM-DD for date/month/week when specified
+}
+
+
+// Ledger helpers
+export interface LedgerEntryRow {
+  id: number;
+  user_id: string;
+  session_id: string | null;
+  title: string;
+  amount_cents: number; // 正為加項，負為減項
+  occurred_at_ms: number;
+  created_at_ms: number;
+}

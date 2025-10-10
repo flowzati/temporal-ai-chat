@@ -1,9 +1,9 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
 import { Capability, SendMessageArgs, SaveLedgerInput, StartSessionArgs, ConfirmLedgerArgs, QueueItem, ParsedLedgerProposalFlat } from '../types';
+
 // 說明：本工作流採用 Entity/Virtual Actor 模式（每個 sessionId 對應一個長駐實體）。
 // - Workflow 僅負責決策與協調（決定性），所有 I/O 交由 Activities 執行（避免非決定性）。
 // - 以內存佇列 + condition 等待的方式串行處理訊息，確保順序與一致性。
-
 export interface ChatActivities {
   decideCapability: (userMessage: string) => Promise<Capability>;
   chatReply: (userMessage: string) => Promise<string>;
@@ -31,7 +31,6 @@ export const cancelSignal = defineSignal('cancel');
 
 // Entity 風格的長駐工作流：每個 sessionId 對應一個工作流實體
 export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<void> {
-  console.log('chatSessionWorkflow', startArgs);
   // 執行期佇列：Update 只入列，主循環負責出列處理
   const pendingQueue: QueueItem[] = [];
   let currentScope: CancellationScope | null = null;
@@ -51,8 +50,14 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   });
 
   // 確認記帳（Confirm）：直接呼叫 Activity 寫 DB，不入列避免阻塞緒列
-  setHandler(confirmLedgerUpdate, async (args: { userId: string; sessionId: string; proposal: { title: string; amountCents: number; occurredAtMs: number } }): Promise<string> => {
-    return await acts.saveLedger({ userId: args.userId, sessionId: args.sessionId, title: args.proposal.title, amountCents: args.proposal.amountCents, occurredAtMs: args.proposal.occurredAtMs });
+  setHandler(confirmLedgerUpdate, async (args: ConfirmLedgerArgs): Promise<string> => {
+    return await acts.saveLedger({
+      userId: args.userId,
+      sessionId: args.sessionId,
+      title: args.proposal.title,
+      amountCents: args.proposal.amountCents,
+      occurredAtMs: args.proposal.occurredAtMs
+    });
   });
 
   // 取消訊號：取消當前作用域，讓等待中的 Activity/計時器立即拋出取消錯誤
@@ -91,7 +96,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
         return;
       }
       case 'ledger_query': {
-        const resultText = await acts.queryLedgerRange({ ...item });
+        const resultText = await acts.queryLedgerRange(item);
         item.completion.resolve(resultText);
         return;
       }

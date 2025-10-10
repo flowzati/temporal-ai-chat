@@ -1,9 +1,8 @@
 import { z } from 'zod';
 import { Agent, run } from '@openai/agents';
 import { setDefaultOpenAIKey } from '@openai/agents-openai';
-import { listLedgerEntriesByRange } from '../utils/db';
-import { computeLedgerRange, formatLedgerSummary, buildLedgerProposalFields, LedgerRangeInput } from '../utils/ledger';
-import { Capability, ParsedLedgerProposalFlat, SendMessageArgs } from '../types';
+import { computeLedgerRange, buildLedgerProposalFields } from '../utils/ledger';
+import { Capability, ParsedLedgerProposalFlat, SendMessageArgs, LedgerQueryRangeResult, LedgerRangeInput } from '../types';
 
 const EnvSchema = z.object({ OPENAI_API_KEY: z.string().min(1) });
 
@@ -21,7 +20,7 @@ export function initOpenAIOnce(): void {
 // Initialize at module load; subsequent API calls无需再次驗證
 initOpenAIOnce();
 
-export async function decideCapability(text: string): Promise<Capability> {
+export async function decideCapability(userMessage: string): Promise<Capability> {
   const schema = z.object({ type: z.enum(['chat', 'weather', 'ledger_proposal', 'ledger_query']) });
   const agent = new Agent({
     name: 'Capability Router',
@@ -30,7 +29,7 @@ export async function decideCapability(text: string): Promise<Capability> {
       '- 一般對話 → chat\n- 問天氣、氣溫、下雨、晴、°C → weather\n' +
       '- 記帳新增/扣除 → ledger_proposal\n- 查詢當日/昨日/特定日期/當月花費 → ledger_query',
   });
-  const out = await run(agent, text);
+  const out = await run(agent, userMessage);
   const parsed = schema.parse(typeof out.finalOutput === 'string' ? JSON.parse(out.finalOutput) : out.finalOutput);
   return parsed.type as Capability;
 }
@@ -66,7 +65,7 @@ export async function weatherReply(userMessage: string): Promise<string> {
   return `${city} 現在約 ${temp}°C，天氣狀況：${desc}`;
 }
 
-export async function parseLedgerProposal(args: SendMessageArgs): Promise<ParsedLedgerProposalFlat> {
+export async function parseLedgerProposal(userMessage: string, userId: string, sessionId: string | null): Promise<ParsedLedgerProposalFlat> {
   const now = new Date();
   const agent = new Agent({
     name: 'Ledger Parser',
@@ -79,10 +78,10 @@ export async function parseLedgerProposal(args: SendMessageArgs): Promise<Parsed
       `\n今天日期為 ${now.toISOString().slice(0, 10)}，時間請盡量解析成 ISO 日期時間。` +
       '\n只輸出 JSON，勿加說明。',
   });
-  const raw = String((await run(agent, args.userMessage)).finalOutput || '').trim();
+  const raw = String((await run(agent, userMessage)).finalOutput || '').trim();
   const parsed = JSON.parse(raw);
   if (parsed?.kind === 'add' || parsed?.kind === 'sub') {
-    const built = buildLedgerProposalFields({ parsed, userId: args.userId, sessionId: args.sessionId ?? null, now });
+    const built = buildLedgerProposalFields({ parsed, userId: userId, sessionId: sessionId ?? null, now });
     return {
       userId: built.userId,
       sessionId: built.sessionId,
@@ -97,7 +96,7 @@ export async function parseLedgerProposal(args: SendMessageArgs): Promise<Parsed
   throw new Error('Not a ledger proposal');
 }
 
-export async function queryLedgerRange(args: SendMessageArgs): Promise<string> {
+export async function queryLedgerRange(userMessage: string): Promise<LedgerQueryRangeResult> {
   const now = new Date();
   const agent = new Agent({
     name: 'Ledger Query Parser',
@@ -107,14 +106,12 @@ export async function queryLedgerRange(args: SendMessageArgs): Promise<string> {
       `\n今天日期為 ${now.toISOString().slice(0, 10)}，時間請盡量解析成 ISO 日期時間。` +
       '\n只輸出 JSON，勿加說明。',
   });
-  const raw = String((await run(agent, args.userMessage)).finalOutput || '').trim();
+  const raw = String((await run(agent, userMessage)).finalOutput || '').trim();
   const parsed = JSON.parse(raw);
-  console.log('parsed', parsed);
   if (parsed?.kind === 'query') {
     const range = parsed.range as LedgerRangeInput['range'];
     const { start, end } = computeLedgerRange({ range, date: parsed.date }, now);
-    const entries = listLedgerEntriesByRange(args.userId, start.getTime(), end.getTime());
-    return formatLedgerSummary(entries, start, end);
+    return { startMs: start.getTime(), endMs: end.getTime() };
   }
   throw new Error('Not a ledger query');
 }

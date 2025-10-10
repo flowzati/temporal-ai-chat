@@ -1,9 +1,4 @@
-import { LedgerEntryRow } from './db';
-
-export interface LedgerRangeInput {
-  range: 'today' | 'yesterday' | 'date' | 'month' | 'week';
-  date?: string; // YYYY-MM-DD for date/month/week when specified
-}
+import { LedgerRangeInput, LedgerEntryRow } from '../types';
 
 function startOfDay(date: Date): Date {
   const normalized = new Date(date);
