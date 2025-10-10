@@ -19,6 +19,27 @@ function ensureOpenAI() {
   setDefaultOpenAIKey(parsed.data.OPENAI_API_KEY);
 }
 
+// 決策可用功能：聊天、查天氣、記帳、查帳
+export type Capability = 'chat' | 'weather' | 'ledger_proposal' | 'ledger_query';
+export async function decideCapability(args: { text: string }): Promise<Capability> {
+  ensureOpenAI();
+  const schema = z.object({ type: z.enum(['chat', 'weather', 'ledger_proposal', 'ledger_query']) });
+  const agent = new Agent({
+    name: 'Capability Router',
+    instructions:
+      '請判斷使用者訊息應該走哪個功能，僅輸出 JSON：{"type":"chat|weather|ledger_proposal|ledger_query"}。\n' +
+      '- 一般對話 → chat\n- 問天氣、氣溫、下雨、晴、°C → weather\n' +
+      '- 記帳新增/扣除 → ledger_proposal\n- 查詢當日/昨日/特定日期/當月花費 → ledger_query',
+  });
+  const out = await run(agent, args.text);
+  try {
+    const parsed = schema.parse(typeof out.finalOutput === 'string' ? JSON.parse(out.finalOutput) : out.finalOutput);
+    return parsed.type;
+  } catch {
+    return 'chat';
+  }
+}
+
 // 使用 @openai/agents 產生回覆（在 worker 執行）
 export async function generateReply(args: GenerateReplyArgs): Promise<string> {
   ensureOpenAI();
@@ -233,25 +254,4 @@ export async function saveLedger(args: { proposal: LedgerProposal }): Promise<st
     createdAtMs: Date.now(),
   });
   return '已存入記帳';
-}
-
-// 決策可用功能：聊天、查天氣、記帳、查帳
-export type Capability = 'chat' | 'weather' | 'ledger_proposal' | 'ledger_query';
-export async function decideCapability(args: { text: string }): Promise<Capability> {
-  ensureOpenAI();
-  const schema = z.object({ type: z.enum(['chat', 'weather', 'ledger_proposal', 'ledger_query']) });
-  const agent = new Agent({
-    name: 'Capability Router',
-    instructions:
-      '請判斷使用者訊息應該走哪個功能，僅輸出 JSON：{"type":"chat|weather|ledger_proposal|ledger_query"}。\n' +
-      '- 一般對話 → chat\n- 問天氣、氣溫、下雨、晴、°C → weather\n' +
-      '- 記帳新增/扣除 → ledger_proposal\n- 查詢當日/昨日/特定日期/當月花費 → ledger_query',
-  });
-  const out = await run(agent, args.text);
-  try {
-    const parsed = schema.parse(typeof out.finalOutput === 'string' ? JSON.parse(out.finalOutput) : out.finalOutput);
-    return parsed.type;
-  } catch {
-    return 'chat';
-  }
 }

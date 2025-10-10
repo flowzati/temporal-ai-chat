@@ -86,8 +86,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
 
   // 確認記帳（Confirm）：直接呼叫 Activity 寫 DB，不入列避免阻塞緒列
   setHandler(confirmLedgerUpdate, async (args: { userId: string; sessionId: string; proposal: { title: string; amountCents: number; occurredAtMs: number } }): Promise<string> => {
-    const out = await acts.saveLedger({ proposal: { userId: args.userId, sessionId: args.sessionId, title: args.proposal.title, amountCents: args.proposal.amountCents, occurredAtMs: args.proposal.occurredAtMs } });
-    return out;
+    return await acts.saveLedger({ proposal: { userId: args.userId, sessionId: args.sessionId, title: args.proposal.title, amountCents: args.proposal.amountCents, occurredAtMs: args.proposal.occurredAtMs } });
   });
 
   // 保持工作流存活，等待更新（Updates）
