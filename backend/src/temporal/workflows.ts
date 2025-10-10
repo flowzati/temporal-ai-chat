@@ -1,4 +1,5 @@
-import { proxyActivities, defineSignal, defineUpdate, setHandler, upsertSearchAttributes, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
+import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
+
 import { Capability } from './activities';
 // 說明：本工作流採用 Entity/Virtual Actor 模式（每個 sessionId 對應一個長駐實體）。
 // - Workflow 僅負責決策與協調（決定性），所有 I/O 交由 Activities 執行（避免非決定性）。
@@ -66,13 +67,13 @@ async function handleWeather(item: QueueItem) {
 }
 
 async function handleLedgerProposal(item: QueueItem) {
-  const ledger = await acts.parseLedgerProposal({ userId: item.userId, sessionId: item.sessionId, text: item.userMessage, nowMs: Date.now() });
+  const ledger = await acts.parseLedgerProposal({ userId: item.userId, sessionId: item.sessionId, text: item.userMessage });
   const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
   item.completion.resolve(payload);
 }
 
 async function handleLedgerQuery(item: QueueItem) {
-  const ledger = await acts.queryLedgerRange({ userId: item.userId, text: item.userMessage, nowMs: Date.now() });
+  const ledger = await acts.queryLedgerRange({ userId: item.userId, text: item.userMessage });
   item.completion.resolve(ledger.resultText);
 }
 
@@ -100,13 +101,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     // 取消當前作用域，讓等待中的 Activity/計時器立即拋出取消錯誤
     currentScope?.cancel();
   });
-
-  // 初始化：可記錄初始搜尋屬性（目前關閉，保留示例）
-  // await upsertSearchAttributes({
-  //   SessionId: [startArgs.sessionId],
-  //   StartedAt: [new Date(startArgs.startedAtMs)],
-  // });
-
+  
   // 保持工作流存活，等待更新（Updates）
   // 若要釋出資源，可設計閒置逾時後關閉或 ContinueAsNew
   // eslint-disable-next-line no-constant-condition

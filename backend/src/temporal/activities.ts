@@ -94,12 +94,12 @@ export const LedgerProposalSchema = z.object({
 });
 export type LedgerProposal = z.infer<typeof LedgerProposalSchema>;
 
-export async function parseLedgerProposal(args: { userId: string; sessionId?: string | null; text: string; nowMs?: number }): Promise<
+export async function parseLedgerProposal(args: { userId: string; sessionId?: string | null; text: string; }): Promise<
   { proposal: LedgerProposal; explain: string }
 > {
   ensureOpenAI();
-
-  const now = new Date(args.nowMs ?? Date.now());
+  // Use activity-time instead of workflow-time; determinism is preserved in workflow
+  const now = new Date();
   const agent = new Agent({
     name: 'Ledger Parser',
     instructions:
@@ -137,12 +137,11 @@ export async function parseLedgerProposal(args: { userId: string; sessionId?: st
   }
 }
 
-export async function queryLedgerRange(args: { userId: string; text: string; nowMs?: number }): Promise<
+export async function queryLedgerRange(args: { userId: string; text: string }): Promise<
   { resultText: string }
 > {
   ensureOpenAI();
-
-  const now = new Date(args.nowMs ?? Date.now());
+  const now = new Date();
   const agent = new Agent({
     name: 'Ledger Query Parser',
     instructions:
