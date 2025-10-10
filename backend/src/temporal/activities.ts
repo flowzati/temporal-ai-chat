@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { Agent, run } from '@openai/agents';
 import { setDefaultOpenAIKey } from '@openai/agents-openai';
-import { insertLedgerEntry, listLedgerEntriesByRange, LedgerEntryRow } from '../utils/db';
+import { insertLedgerEntry, listLedgerEntriesByRange } from '../utils/db';
+import { computeLedgerRange, formatLedgerSummary, buildLedgerProposalFields, LedgerRangeInput } from '../utils/ledger';
 
 export interface ChatReplyArgs {
   userMessage: string;
@@ -43,14 +44,10 @@ export async function decideCapability(args: { text: string }): Promise<Capabili
 // 使用 @openai/agents 產生回覆（在 worker 執行）
 export async function chatReply(args: ChatReplyArgs): Promise<string> {
   ensureOpenAI();
-
-  // 建立一個簡潔的聊天 Agent（可根據需求調整模型與設定）
   const agent = new Agent({
     name: 'Chat Agent',
     instructions: '你是簡潔且有幫助的助理。',
-    // 若未指定 model，會使用預設（一般為 gpt-4.1 / 由 SDK 解析）
   });
-
   const result = await run(agent, args.userMessage);
   const out = result.finalOutput;
   if (typeof out === 'string') return out;
@@ -64,7 +61,7 @@ export async function weatherReply(args: ChatReplyArgs): Promise<string> {
   const CitySchema = z.object({ city: z.string().min(1) });
   const extractor = new Agent({
     name: 'City Extractor',
-    instructions: '從使用者訊息中抽取欲查詢天氣的城市，只輸出 JSON：{"city":"Taipei"}；若無則 {"city":""}。',
+    instructions: '從使用者訊息中抽取欲查詢天氣的城市，只輸出 JSON:{"city":"Taipei"}；若無則 {"city":""}。',
   });
   const raw = String((await run(extractor, args.userMessage)).finalOutput || '').trim();
   let city = '';
@@ -118,21 +115,21 @@ export async function parseLedgerProposal(args: { userId: string; sessionId?: st
   try {
     const parsed = JSON.parse(raw);
     if (parsed?.kind === 'add' || parsed?.kind === 'sub') {
-      const sign = parsed.kind === 'add' ? 1 : -1;
-      const amountCents = Math.round(Number(parsed.amount) * 100) * sign;
-      const occurredAtMs = Number(new Date(parsed.occurredAt).getTime());
-      const proposal: LedgerProposal = {
+      const built = buildLedgerProposalFields({
+        parsed,
         userId: args.userId,
         sessionId: args.sessionId ?? null,
-        title: String(parsed.item ?? '項目'),
-        amountCents,
-        occurredAtMs: Number.isFinite(occurredAtMs) ? occurredAtMs : now.getTime(),
+        now,
+      });
+      const proposal: LedgerProposal = {
+        userId: built.userId,
+        sessionId: built.sessionId,
+        title: built.title,
+        amountCents: built.amountCents,
+        occurredAtMs: built.occurredAtMs,
       };
       LedgerProposalSchema.parse(proposal);
-      const explain = `${proposal.title} ${amountCents >= 0 ? '+' : ''}${(proposal.amountCents / 100).toFixed(2)}，時間 ${new Date(
-        proposal.occurredAtMs
-      ).toLocaleString()}`;
-      return { proposal, explain };
+      return { proposal, explain: built.explain };
     }
     throw new Error('Not a ledger proposal');
   } catch (err: any) {
@@ -158,78 +155,10 @@ export async function queryLedgerRange(args: { userId: string; text: string; now
   try {
     const parsed = JSON.parse(raw);
     if (parsed?.kind === 'query') {
-      const base = new Date(now);
-      base.setHours(0, 0, 0, 0);
-
-      // 小工具：時間範圍計算（[start, end)）
-      const startOfDay = (d: Date) => {
-        const t = new Date(d);
-        t.setHours(0, 0, 0, 0);
-        return t;
-      };
-      const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 24 * 60 * 60 * 1000);
-      const startOfMonth = (d: Date) => {
-        const t = new Date(d);
-        t.setDate(1);
-        t.setHours(0, 0, 0, 0);
-        return t;
-      };
-      const addMonths = (d: Date, n: number) => {
-        const t = new Date(d);
-        t.setMonth(t.getMonth() + n);
-        return t;
-      };
-      const startOfWeekMon = (d: Date) => {
-        const t = startOfDay(d);
-        const day = t.getDay(); // 0 Sun .. 6 Sat
-        const diff = (day + 6) % 7; // Monday=0
-        return addDays(t, -diff);
-      };
-
-      const range = String(parsed.range);
-      let start: Date;
-      let end: Date;
-      if (range === 'today') {
-        start = startOfDay(base);
-        end = addDays(start, 1);
-      } else if (range === 'yesterday') {
-        end = startOfDay(base);
-        start = addDays(end, -1);
-      } else if (range === 'date') {
-        const d = new Date(parsed.date);
-        if (isNaN(d.getTime())) throw new Error('Invalid date');
-        start = startOfDay(d);
-        end = addDays(start, 1);
-      } else if (range === 'week') {
-        const d = parsed.date ? new Date(parsed.date) : base;
-        const weekStart = startOfWeekMon(d);
-        start = weekStart;
-        end = addDays(weekStart, 7);
-      } else if (range === 'month') {
-        const d = parsed.date ? new Date(parsed.date + '-01') : base;
-        start = startOfMonth(d);
-        end = addMonths(start, 1);
-      } else {
-        throw new Error('Unsupported range');
-      }
-
-      // 列出範圍內所有收入與支出，並計算加總
+      const range = parsed.range as LedgerRangeInput['range'];
+      const { start, end } = computeLedgerRange({ range, date: parsed.date }, now);
       const entries = listLedgerEntriesByRange(args.userId, start.getTime(), end.getTime());
-      let incomeCents = 0;
-      let expenseCents = 0; // 負數
-      const lines = entries.map((e: LedgerEntryRow) => {
-        const sign = e.amount_cents >= 0 ? '+' : '-';
-        if (e.amount_cents >= 0) incomeCents += e.amount_cents; else expenseCents += e.amount_cents;
-        const amt = Math.abs(e.amount_cents) / 100;
-        const time = new Date(e.occurred_at_ms).toLocaleString();
-        return `${time} ${e.title} ${sign}$${amt.toFixed(2)}`;
-      });
-      const income = (incomeCents / 100).toFixed(2);
-      const expense = (Math.abs(expenseCents) / 100).toFixed(2);
-      const net = ((incomeCents + expenseCents) / 100).toFixed(2);
-      const header = `範圍：${start.toISOString().slice(0, 10)} 至 ${end.toISOString().slice(0, 10)}\n收入：$${income}  支出：-$${expense}  淨額：$${net}`;
-      const body = lines.length ? lines.join('\n') : '（無資料）';
-      const text = `${header}\n${body}`;
+      const text = formatLedgerSummary(entries, start, end);
       return { resultText: text };
     }
     throw new Error('Not a ledger query');

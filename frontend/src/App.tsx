@@ -131,6 +131,16 @@ export function App() {
     setInput('');
   }
 
+  function cancelAll() {
+    if (!wsRef.current) return;
+    const payload = {
+      type: 'cancel',
+      sessionId,
+      userId,
+    };
+    wsRef.current.send(JSON.stringify(payload));
+  }
+
   function confirmLedger() {
     if (!wsRef.current || !pendingLedger) return;
     const payload = {
@@ -274,6 +284,9 @@ export function App() {
           />
           <button onClick={sendMessage} disabled={!canSend}>
             送出
+          </button>
+          <button onClick={cancelAll} disabled={!connected} title="取消當前/排隊中的處理">
+            取消
           </button>
         </div>
       </div>

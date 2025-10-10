@@ -122,6 +122,11 @@ async function main() {
           const sessionHandle = await ensureSessionWorkflow(temporalClient, sessionId, Date.now());
           const reply: string = await sessionHandle.executeUpdate('confirmLedger', { args: [{ userId, sessionId, proposal }] });
           ws.send(JSON.stringify({ type: 'assistant_message', sessionId, userId, message: reply }));
+        } else if (data?.type === 'cancel') {
+          const sessionId = String(data.sessionId ?? 'unknown');
+          const sessionHandle = await ensureSessionWorkflow(temporalClient, sessionId, Date.now());
+          await sessionHandle.signal('cancel');
+          // 工作流會自行回覆取消訊息，避免重複傳送
         }
       } catch (err: any) {
         ws.send(JSON.stringify({ type: 'error', error: err?.message ?? 'Unknown error' }));
