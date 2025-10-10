@@ -1,5 +1,5 @@
 import { Trigger } from '@temporalio/workflow';
-
+import { z } from 'zod';
 export interface ChatBase {
   userId: string;
   sessionId: string | undefined | null;
@@ -36,6 +36,21 @@ export interface ParsedLedgerProposalFlat extends ChatBase {
   title: string;
   amountCents: number;
   occurredAtMs: number;
+  explain: string;
+}
+
+// ===== Ledger: parse intent =====
+export const LedgerProposalSchema = z.object({
+  userId: z.string().min(1),
+  sessionId: z.string().optional().nullable(),
+  title: z.string().min(1),
+  amountCents: z.number().int(),
+  occurredAtMs: z.number().int(),
+});
+export type LedgerProposal = z.infer<typeof LedgerProposalSchema>;
+
+export interface ParseLedgerProposalResult {
+  proposal: LedgerProposal;
   explain: string;
 }
 
