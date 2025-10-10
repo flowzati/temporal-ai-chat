@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Agent, run, tool } from '@openai/agents';
 import { setDefaultOpenAIKey } from '@openai/agents-openai';
-import { insertLedgerEntry, sumLedgerEntriesByRange } from '../utils/db';
+import { insertLedgerEntry, sumLedgerEntriesByRange, listLedgerEntriesByRange, LedgerEntryRow } from '../utils/db';
 
 export interface GenerateReplyArgs {
   userMessage: string;
@@ -101,7 +101,7 @@ export async function parseLedgerIntent(args: { userId: string; sessionId?: stri
       '\n若是新增/扣除記帳：請自動判斷是【收入】或【支出】並輸出 { kind: "add"|"sub", item: string, amount: number, currency: "TWD", occurredAt: ISO8601 }。' +
       '\n判斷規則：\n- 餐飲/交通/購物/娛樂/房租/水電等一般消費 → 視為支出 (sub)。\n- 薪資/退款/轉入/收款/報銷/利息等 → 視為收入 (add)。\n- 如果文字金額有負號，優先視為支出；有「收入/入帳/進帳」語意優先視為收入；同時出現時以語意為準。' +
       '\n金額可含貨幣符號（如 $、NT$），請解析為數值；單位一律視為 TWD。' +
-      '\n若是查詢：輸出 { kind: "query", range: "today"|"yesterday"|"date"|"month", date?: YYYY-MM-DD }。' +
+      '\n若是查詢：輸出 { kind: "query", range: "today"|"yesterday"|"date"|"month"|"week", date?: YYYY-MM-DD }。' +
       `\n今天日期為 ${now.toISOString().slice(0, 10)}，時間請盡量解析成 ISO 日期時間。` +
       '\n只輸出 JSON，勿加說明。',
   });
@@ -155,8 +155,24 @@ export async function parseLedgerIntent(args: { userId: string; sessionId?: stri
       } else {
         return { type: 'none' };
       }
-      const total = sumLedgerEntriesByRange(args.userId, start.getTime(), end.getTime());
-      const text = `總額：$${(total / 100).toFixed(2)}（${start.toISOString().slice(0, 10)} 至 ${end.toISOString().slice(0, 10)}）`;
+
+      // 列出範圍內所有收入與支出，並計算加總
+      const entries = listLedgerEntriesByRange(args.userId, start.getTime(), end.getTime());
+      let incomeCents = 0;
+      let expenseCents = 0; // 負數
+      const lines = entries.map((e: LedgerEntryRow) => {
+        const sign = e.amount_cents >= 0 ? '+' : '-';
+        if (e.amount_cents >= 0) incomeCents += e.amount_cents; else expenseCents += e.amount_cents;
+        const amt = Math.abs(e.amount_cents) / 100;
+        const time = new Date(e.occurred_at_ms).toLocaleString();
+        return `${time} ${e.title} ${sign}$${amt.toFixed(2)}`;
+      });
+      const income = (incomeCents / 100).toFixed(2);
+      const expense = (Math.abs(expenseCents) / 100).toFixed(2);
+      const net = ((incomeCents + expenseCents) / 100).toFixed(2);
+      const header = `範圍：${start.toISOString().slice(0, 10)} 至 ${end.toISOString().slice(0, 10)}\n收入：$${income}  支出：-$${expense}  淨額：$${net}`;
+      const body = lines.length ? lines.join('\n') : '（無資料）';
+      const text = `${header}\n${body}`;
       return { type: 'query', resultText: text };
     }
   } catch {}

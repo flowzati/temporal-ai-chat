@@ -1,4 +1,4 @@
-import { proxyActivities, defineSignal, defineUpdate, setHandler, sleep, upsertSearchAttributes, continueAsNew, workflowInfo, condition, Trigger } from '@temporalio/workflow';
+import { proxyActivities, defineSignal, defineUpdate, setHandler, upsertSearchAttributes, continueAsNew, workflowInfo, condition, Trigger } from '@temporalio/workflow';
 
 // 代理活動：定義可在工作流中呼叫的活動函式（會在 worker 上執行）
 const { generateReply, generateReplyWithTools, decideCapability, parseLedgerIntent, saveLedger } = proxyActivities<{
@@ -100,14 +100,8 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   //   StartedAt: [new Date(startArgs.startedAtMs)],
   // });
 
-  let cancelled = false;
-  setHandler(cancelSignal, () => {
-    cancelled = true;
-  });
-
   // 設定 Update：入列後等待主循環處理完成
   setHandler(sendMessageUpdate, async (args: SendMessageArgs): Promise<string> => {
-    if (cancelled) return 'Request cancelled';
     const completion = new Trigger<string>();
     pendingQueue.push({ userMessage: args.userMessage, completion, userId: args.userId });
     return await completion;
@@ -115,7 +109,6 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
 
   // 確認記帳：直接執行（不入列），避免阻塞
   setHandler(confirmLedgerUpdate, async (args: { userId: string; sessionId: string; proposal: { title: string; amountCents: number; occurredAtMs: number } }): Promise<string> => {
-    if (cancelled) return 'Request cancelled';
     const out = await saveLedger({ proposal: { userId: args.userId, sessionId: args.sessionId, title: args.proposal.title, amountCents: args.proposal.amountCents, occurredAtMs: args.proposal.occurredAtMs } });
     // 更新小型緩衝
     addRecent('user', `確認記帳：${args.proposal.title}`);
