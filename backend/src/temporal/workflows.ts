@@ -1,7 +1,11 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, sleep, upsertSearchAttributes } from '@temporalio/workflow';
 
 // 代理活動：定義可在工作流中呼叫的活動函式（會在 worker 上執行）
-const { generateReply } = proxyActivities<{ generateReply: (args: { userMessage: string }) => Promise<string> }>({
+const { generateReply, generateReplyWithTools, decideUseTools } = proxyActivities<{
+  generateReply: (args: { userMessage: string }) => Promise<string>;
+  generateReplyWithTools: (args: { userMessage: string }) => Promise<string>;
+  decideUseTools: (args: { userMessage: string }) => Promise<boolean>;
+}>({
   startToCloseTimeout: '2 minute',
 });
 
@@ -47,7 +51,11 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     //   StartedAt: [new Date(args.startedAtMs)],
     // });
 
-    const reply = await generateReply({ userMessage: args.userMessage });
+    // 請 OpenAI 決策是否應該使用工具（可利用 Temporal activity 以隔離 I/O）
+    const shouldUseTools = await decideUseTools({ userMessage: args.userMessage });
+    const reply = shouldUseTools
+      ? await generateReplyWithTools({ userMessage: args.userMessage })
+      : await generateReply({ userMessage: args.userMessage });
     return reply;
   });
 
