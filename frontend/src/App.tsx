@@ -291,11 +291,12 @@ export function App() {
               }
             }}
           />
-          <button onClick={sendMessage} disabled={!canSend} title={waitingReply ? '等待回覆中' : '送出訊息'}>
-            送出
-          </button>
-          <button onClick={cancelAll} disabled={!connected || !waitingReply} title={waitingReply ? '取消當前處理' : '等待回覆時才可取消'}>
-            取消
+          <button
+            onClick={waitingReply ? cancelAll : sendMessage}
+            disabled={waitingReply ? !connected : !canSend}
+            title={waitingReply ? '取消當前處理' : '送出訊息'}
+          >
+            {waitingReply ? '取消' : '送出'}
           </button>
         </div>
       </div>
