@@ -8,6 +8,7 @@ export type AppConfig = {
   temporalAddress: string; // Temporal 叢集位址 (host:port)
   temporalNamespace: string; // Temporal 命名空間
   openaiApiKey: string; // OpenAI API 金鑰
+  dbPath: string; // SQLite DB 路徑
 };
 
 export function loadConfig(): AppConfig {
@@ -15,6 +16,7 @@ export function loadConfig(): AppConfig {
   const temporalAddress = process.env.TEMPORAL_ADDRESS ?? '127.0.0.1:7233';
   const temporalNamespace = process.env.TEMPORAL_NAMESPACE ?? 'default';
   const openaiApiKey = process.env.OPENAI_API_KEY ?? '';
+  const dbPath = process.env.SQLITE_DB_PATH ?? './chat.db';
 
   // 缺少金鑰直接拋錯，避免在執行時期才發生問題
   if (!openaiApiKey) {
@@ -31,5 +33,6 @@ export function loadConfig(): AppConfig {
     temporalAddress,
     temporalNamespace,
     openaiApiKey,
+    dbPath,
   };
 }

@@ -1,7 +1,9 @@
 import { WebSocketServer } from 'ws';
 import http from 'http';
+import url from 'url';
 import { Connection, Client } from '@temporalio/client';
 import { loadConfig } from './utils/env';
+import { getMessages, insertMessage, listSessions, sessionExists, upsertSession } from './utils/db';
 
 // 與工作流更新對應的參數型別
 type SendMessageArgs = {
@@ -35,7 +37,42 @@ async function ensureSessionWorkflow(client: Client, sessionId: string, startedA
 async function main() {
   const config = loadConfig();
 
-  const server = http.createServer();
+  const server = http.createServer((req, res) => {
+    // Very small JSON REST without external deps
+    const parsed = req?.url ? url.parse(req.url, true) : { pathname: '' as string, query: {} as any };
+    const method = req?.method ?? 'GET';
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (method === 'OPTIONS') {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
+    if (method === 'GET' && parsed.pathname === '/api/sessions') {
+      const items = listSessions(200);
+      res.end(JSON.stringify({ items }));
+      return;
+    }
+
+    if (method === 'GET' && parsed.pathname?.startsWith('/api/sessions/') && parsed.pathname?.endsWith('/messages')) {
+      const parts = parsed.pathname.split('/');
+      const sessionId = parts[3] || '';
+      if (!sessionId) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: 'Missing sessionId' }));
+        return;
+      }
+      const items = getMessages(sessionId, 1000);
+      res.end(JSON.stringify({ items }));
+      return;
+    }
+
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: 'Not found' }));
+  });
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   const temporalClient = await createTemporalClient(config.temporalAddress, config.temporalNamespace);
@@ -58,19 +95,22 @@ async function main() {
           }
 
           // 取得或啟動該 session 的工作流（entity）
-          const sessionHandle = await ensureSessionWorkflow(temporalClient, sessionId, Date.now());
+          const now = Date.now();
+          // Upsert session and persist user message
+          const title = sessionExists(sessionId) ? null : args.userMessage; // first user message as title
+          upsertSession(sessionId, title, now);
+          insertMessage(sessionId, 'user', args.userMessage, now);
+
+          // 取得或啟動該 session 的工作流（entity）
+          const sessionHandle = await ensureSessionWorkflow(temporalClient, sessionId, now);
 
           // 透過 Update 執行單次訊息處理並取得回覆（以 options.args 傳遞）
           const reply: string = await sessionHandle.executeUpdate('sendMessage', { args: [args] });
 
-          ws.send(
-            JSON.stringify({
-              type: 'assistant_message',
-              sessionId,
-              userId: args.userId,
-              message: reply,
-            })
-          );
+          // persist assistant message
+          insertMessage(sessionId, 'assistant', reply, Date.now());
+
+          ws.send(JSON.stringify({ type: 'assistant_message', sessionId, userId: args.userId, message: reply }));
         }
       } catch (err: any) {
         ws.send(JSON.stringify({ type: 'error', error: err?.message ?? 'Unknown error' }));
