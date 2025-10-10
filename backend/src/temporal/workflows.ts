@@ -9,11 +9,12 @@ export interface ChatActivities {
   decideCapability: (args: { text: string }) => Promise<Capability>;
   chatReply: (args: { userMessage: string }) => Promise<string>;
   weatherReply: (args: { userMessage: string }) => Promise<string>;
-  saveLedger: (args: { proposal: { userId: string; sessionId?: string | null; title: string; amountCents: number; occurredAtMs: number } }) => Promise<string>;
-  parseLedgerProposal: (args: { userId: string; sessionId?: string | null; text: string; nowMs?: number }) => Promise<
-    { proposal: { userId: string; sessionId?: string | null; title: string; amountCents: number; occurredAtMs: number }; explain: string }
-  >;
-  queryLedgerRange: (args: { userId: string; text: string; nowMs?: number }) => Promise<{ resultText: string }>;
+  saveLedger: (args: SaveLedgerInput) => Promise<string>;
+  parseLedgerProposal: (args: { userId: string; sessionId?: string | null; text: string; }) => Promise<{
+    proposal: { userId: string; sessionId?: string | null; title: string; amountCents: number; occurredAtMs: number };
+    explain: string;
+  }>;
+  queryLedgerRange: (args: { userId: string; text: string; }) => Promise<string>;
 }
 
 // 代理活動：定義在 Worker 執行的函式（OpenAI、DB 存取等 I/O）
@@ -47,6 +48,16 @@ export interface QueueItem {
   completion: Trigger<string>;
   userId: string;
   sessionId: string;
+}
+
+export interface SaveLedgerInput {
+  proposal: {
+    userId: string;
+    sessionId?: string | null;
+    title: string;
+    amountCents: number;
+    occurredAtMs: number;
+  };
 }
 
 // 定義 Update：單次訊息處理，回傳助理回覆（泛型順序為 <Return, [Args]>）
@@ -98,8 +109,8 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
         return;
       }
       case 'ledger_query': {
-        const ledger = await acts.queryLedgerRange({ userId: item.userId, text: item.userMessage });
-        item.completion.resolve(ledger.resultText);
+        const resultText = await acts.queryLedgerRange({ userId: item.userId, text: item.userMessage });
+        item.completion.resolve(resultText);
         return;
       }
       case 'chat':

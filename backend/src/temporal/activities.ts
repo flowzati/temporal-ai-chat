@@ -94,9 +94,12 @@ export const LedgerProposalSchema = z.object({
 });
 export type LedgerProposal = z.infer<typeof LedgerProposalSchema>;
 
-export async function parseLedgerProposal(args: { userId: string; sessionId?: string | null; text: string; }): Promise<
-  { proposal: LedgerProposal; explain: string }
-> {
+export interface ParseLedgerProposalResult {
+  proposal: LedgerProposal;
+  explain: string;
+}
+
+export async function parseLedgerProposal(args: { userId: string; sessionId?: string | null; text: string; }): Promise<ParseLedgerProposalResult> {
   ensureOpenAI();
   // Use activity-time instead of workflow-time; determinism is preserved in workflow
   const now = new Date();
@@ -137,9 +140,7 @@ export async function parseLedgerProposal(args: { userId: string; sessionId?: st
   }
 }
 
-export async function queryLedgerRange(args: { userId: string; text: string }): Promise<
-  { resultText: string }
-> {
+export async function queryLedgerRange(args: { userId: string; text: string }): Promise<string> {
   ensureOpenAI();
   const now = new Date();
   const agent = new Agent({
@@ -157,8 +158,7 @@ export async function queryLedgerRange(args: { userId: string; text: string }): 
       const range = parsed.range as LedgerRangeInput['range'];
       const { start, end } = computeLedgerRange({ range, date: parsed.date }, now);
       const entries = listLedgerEntriesByRange(args.userId, start.getTime(), end.getTime());
-      const text = formatLedgerSummary(entries, start, end);
-      return { resultText: text };
+      return formatLedgerSummary(entries, start, end);
     }
     throw new Error('Not a ledger query');
   } catch (err: any) {
