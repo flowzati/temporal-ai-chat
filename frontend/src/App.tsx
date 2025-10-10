@@ -28,6 +28,8 @@ export function App() {
     { role: 'system', content: '歡迎使用 Temporal AI Chat。' },
   ]);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const messagesBoxRef = useRef<HTMLDivElement | null>(null);
   // 中文輸入法組字狀態（避免組字時 Enter 觸發送出）
   const composingRef = useRef(false);
 
@@ -91,6 +93,14 @@ export function App() {
     loadMessagesForSession();
   }, [apiUrl, sessionId]);
 
+  // 新訊息時自動捲到底部
+  useEffect(() => {
+    const el = messagesBoxRef.current;
+    if (!el) return;
+    // 使用 smooth 體驗更佳；大量訊息時也可切成 auto
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, [messages]);
+
   // 僅在連線且輸入不為空時允許送出
   const canSend = useMemo(() => connected && input.trim().length > 0, [connected, input]);
 
@@ -109,9 +119,9 @@ export function App() {
   }
 
   return (
-    <div style={{ display: 'flex', height: '100vh', fontFamily: 'Inter, system-ui, sans-serif' }}>
+    <div style={{ display: 'flex', height: '98vh', fontFamily: 'Inter, system-ui, sans-serif' }}>
       {/* Sidebar */}
-      <div style={{ width: 280, borderRight: '1px solid #eee', padding: 12, overflow: 'auto' }}>
+      <div style={{ width: sidebarOpen ? 280 : 0, borderRight: '1px solid #eee', padding: sidebarOpen ? 12 : 0, overflow: sidebarOpen ? 'auto' : 'hidden', transition: 'width 0.2s ease, padding 0.2s ease' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h2 style={{ margin: 0, fontSize: 16 }}>Sessions</h2>
           <button
@@ -157,17 +167,48 @@ export function App() {
           )}
         </div>
       </div>
+      <button onClick={() => setSidebarOpen((v) => !v)} aria-expanded={sidebarOpen} title={sidebarOpen ? '收起側邊欄' : '打開側邊欄'}>
+        ☰
+      </button>
 
       {/* Main chat */}
       <div style={{ flex: 1, maxWidth: 900, margin: '0 auto', padding: 24 }}>
-        <h1 style={{ marginTop: 0 }}>Temporal AI Chat</h1>
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, minHeight: 300, background: '#fafafa' }}>
-          {messages.map((m, idx) => (
-            <div key={idx} style={{ marginBottom: 8 }}>
-              <strong>{m.role}: </strong>
-              <span>{m.content}</span>
-            </div>
-          ))}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h1 style={{ marginTop: 0 }}>OpenAI Agents & Temporal</h1>
+          </div>
+        </div>
+        <div ref={messagesBoxRef} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, height: '80vh', overflowY: 'auto', background: '#fafafa' }}>
+          {messages.map((m, idx) => {
+            const isUser = m.role === 'user';
+            const isAssistant = m.role === 'assistant';
+            const isSystem = m.role === 'system';
+            if (isSystem) {
+              return (
+                <div key={idx} style={{ marginBottom: 8, textAlign: 'center', color: '#6b7280', fontSize: 12 }}>
+                  {m.content}
+                </div>
+              );
+            }
+            return (
+              <div key={idx} style={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start', marginBottom: 8 }}>
+                <div
+                  style={{
+                    background: isUser ? '#dcfce7' : '#ffffff',
+                    color: '#111827',
+                    border: '1px solid #e5e7eb',
+                    padding: '8px 10px',
+                    borderRadius: 12,
+                    maxWidth: '75%',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {m.content}
+                </div>
+              </div>
+            );
+          })}
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <input
