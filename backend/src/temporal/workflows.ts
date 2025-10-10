@@ -50,6 +50,20 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   // 執行期佇列：Update 只入列，主循環負責出列處理
   const pendingQueue: { userMessage: string; completion: Trigger<string>; userId: string }[] = [];
 
+  // Helpers: recent buffer ops & unified finalize
+  function addRecent(role: 'user' | 'assistant', content: string) {
+    recentMessages.push({ role, content });
+    if (recentMessages.length > MAX_RECENT) {
+      recentMessages = recentMessages.slice(recentMessages.length - MAX_RECENT);
+    }
+  }
+
+  function finalize(item: { userMessage: string; completion: Trigger<string> }, assistantContent: string) {
+    addRecent('user', item.userMessage);
+    addRecent('assistant', assistantContent);
+    item.completion.resolve(assistantContent);
+  }
+
   // 初始化：可記錄初始搜尋屬性，以利後續查詢
   // await upsertSearchAttributes({
   //   SessionId: [startArgs.sessionId],
@@ -74,11 +88,8 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     if (cancelled) return 'Request cancelled';
     const out = await saveLedger({ proposal: { userId: args.userId, sessionId: args.sessionId, title: args.proposal.title, amountCents: args.proposal.amountCents, occurredAtMs: args.proposal.occurredAtMs } });
     // 更新小型緩衝
-    recentMessages.push({ role: 'user', content: `確認記帳：${args.proposal.title}` });
-    recentMessages.push({ role: 'assistant', content: out });
-    if (recentMessages.length > MAX_RECENT) {
-      recentMessages = recentMessages.slice(recentMessages.length - MAX_RECENT);
-    }
+    addRecent('user', `確認記帳：${args.proposal.title}`);
+    addRecent('assistant', out);
     return out;
   });
 
@@ -100,12 +111,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
       const capability = await decideCapability({ text: item.userMessage });
       if (capability === 'chat') {
         const reply = await generateReply({ userMessage: item.userMessage });
-        recentMessages.push({ role: 'user', content: item.userMessage });
-        recentMessages.push({ role: 'assistant', content: reply });
-        if (recentMessages.length > MAX_RECENT) {
-          recentMessages = recentMessages.slice(recentMessages.length - MAX_RECENT);
-        }
-        item.completion.resolve(reply);
+        finalize(item, reply);
         continue;
       }
 
@@ -114,46 +120,24 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
         if (ledger.type !== 'proposal') {
           // fallback to chat
           const reply = await generateReply({ userMessage: item.userMessage });
-          recentMessages.push({ role: 'user', content: item.userMessage });
-          recentMessages.push({ role: 'assistant', content: reply });
-          if (recentMessages.length > MAX_RECENT) {
-            recentMessages = recentMessages.slice(recentMessages.length - MAX_RECENT);
-          }
-          item.completion.resolve(reply);
+          finalize(item, reply);
           continue;
         }
         const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
-        recentMessages.push({ role: 'user', content: item.userMessage });
-        recentMessages.push({ role: 'assistant', content: payload });
-        if (recentMessages.length > MAX_RECENT) {
-          recentMessages = recentMessages.slice(recentMessages.length - MAX_RECENT);
-        }
-        item.completion.resolve(payload);
+        finalize(item, payload);
         continue;
       }
       if (capability === 'ledger_query') {
         const ledger = await parseLedgerIntent({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
         const summary = ledger.type === 'query' ? ledger.resultText : await generateReply({ userMessage: item.userMessage });
-        recentMessages.push({ role: 'user', content: item.userMessage });
-        recentMessages.push({ role: 'assistant', content: summary });
-        if (recentMessages.length > MAX_RECENT) {
-          recentMessages = recentMessages.slice(recentMessages.length - MAX_RECENT);
-        }
-        item.completion.resolve(summary);
+        finalize(item, summary);
         continue;
       }
 
       // weather 或其他工具
       const reply = await generateReplyWithTools({ userMessage: item.userMessage });
 
-      // 更新小型緩衝
-      recentMessages.push({ role: 'user', content: item.userMessage });
-      recentMessages.push({ role: 'assistant', content: reply });
-      if (recentMessages.length > MAX_RECENT) {
-        recentMessages = recentMessages.slice(recentMessages.length - MAX_RECENT);
-      }
-
-      item.completion.resolve(reply);
+      finalize(item, reply);
     }
 
     if (info.continueAsNewSuggested) {
