@@ -64,6 +64,36 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     item.completion.resolve(assistantContent);
   }
 
+  // Consolidated handlers
+  async function handleChat(item: { userMessage: string; completion: Trigger<string> }) {
+    const reply = await generateReply({ userMessage: item.userMessage });
+    finalize(item, reply);
+  }
+
+  async function handleWeather(item: { userMessage: string; completion: Trigger<string> }) {
+    const reply = await generateReplyWithTools({ userMessage: item.userMessage });
+    finalize(item, reply);
+  }
+
+  async function handleLedgerProposal(item: { userMessage: string; completion: Trigger<string>; userId: string }) {
+    const ledger = await parseLedgerIntent({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
+    if (ledger.type === 'proposal') {
+      const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
+      finalize(item, payload);
+      return;
+    }
+    await handleChat(item);
+  }
+
+  async function handleLedgerQuery(item: { userMessage: string; completion: Trigger<string>; userId: string }) {
+    const ledger = await parseLedgerIntent({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
+    if (ledger.type === 'query') {
+      finalize(item, ledger.resultText);
+      return;
+    }
+    await handleChat(item);
+  }
+
   // 初始化：可記錄初始搜尋屬性，以利後續查詢
   // await upsertSearchAttributes({
   //   SessionId: [startArgs.sessionId],
@@ -109,35 +139,21 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
 
       // 由 OpenAI 決策選擇功能：chat / weather / ledger_proposal / ledger_query
       const capability = await decideCapability({ text: item.userMessage });
-      if (capability === 'chat') {
-        const reply = await generateReply({ userMessage: item.userMessage });
-        finalize(item, reply);
-        continue;
-      }
-
-      if (capability === 'ledger_proposal') {
-        const ledger = await parseLedgerIntent({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
-        if (ledger.type !== 'proposal') {
-          // fallback to chat
-          const reply = await generateReply({ userMessage: item.userMessage });
-          finalize(item, reply);
+      switch (capability) {
+        case 'chat':
+          await handleChat(item);
           continue;
-        }
-        const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
-        finalize(item, payload);
-        continue;
+        case 'ledger_proposal':
+          await handleLedgerProposal(item);
+          continue;
+        case 'ledger_query':
+          await handleLedgerQuery(item);
+          continue;
+        case 'weather':
+        default:
+          await handleWeather(item);
+          continue;
       }
-      if (capability === 'ledger_query') {
-        const ledger = await parseLedgerIntent({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
-        const summary = ledger.type === 'query' ? ledger.resultText : await generateReply({ userMessage: item.userMessage });
-        finalize(item, summary);
-        continue;
-      }
-
-      // weather 或其他工具
-      const reply = await generateReplyWithTools({ userMessage: item.userMessage });
-
-      finalize(item, reply);
     }
 
     if (info.continueAsNewSuggested) {

@@ -1,15 +1,13 @@
 import { z } from 'zod';
 import { Agent, run, tool } from '@openai/agents';
 import { setDefaultOpenAIKey } from '@openai/agents-openai';
-import { insertLedgerEntry, listLedgerEntriesByRange, sumLedgerEntriesByRange } from '../utils/db';
+import { insertLedgerEntry, sumLedgerEntriesByRange } from '../utils/db';
 
 export interface GenerateReplyArgs {
   userMessage: string;
 }
 
-export interface DecideUseToolsArgs {
-  userMessage: string;
-}
+// (removed) DecideUseToolsArgs — replaced by decideCapability
 
 const EnvSchema = z.object({
   OPENAI_API_KEY: z.string().min(1),
@@ -76,25 +74,7 @@ export async function generateReplyWithTools(args: GenerateReplyArgs): Promise<s
   return '（助理沒有回覆文字）';
 }
 
-// 讓 OpenAI 幫忙判斷是否需要使用工具（目前工具為 weather）
-export async function decideUseTools(args: DecideUseToolsArgs): Promise<boolean> {
-  ensureOpenAI();
-
-  const agent = new Agent({
-    name: 'Tool Decision Agent',
-    instructions:
-      '你是決策器。判斷使用者訊息是否需要使用可用工具解決（目前只有天氣 weather 工具）。只輸出 yes 或 no。\n' +
-      '例如：問天氣、溫度、下雨、晴、°C 等屬於需要工具。其他一般聊天則不需要工具。',
-  });
-
-  const result = await run(agent, args.userMessage);
-  const out = String(result.finalOutput || '').trim().toLowerCase();
-  console.log('decideUseTools', out);
-  if (out.includes('yes')) return true;
-  if (out.includes('no')) return false;
-  // 若無法判斷，保守回傳不使用工具
-  return false;
-}
+// (removed) decideUseTools — superseded by decideCapability
 
 // ===== Ledger: parse intent =====
 export const LedgerProposalSchema = z.object({

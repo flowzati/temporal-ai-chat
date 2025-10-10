@@ -127,6 +127,7 @@ export function insertLedgerEntry(params: {
   ).run(params.userId, params.sessionId ?? null, params.title, params.amountCents, params.occurredAtMs, params.createdAtMs);
 }
 
+// Note: retaining listLedgerEntriesByRange for potential future detailed listings
 export function listLedgerEntriesByRange(userId: string, startMs: number, endMs: number): LedgerEntryRow[] {
   const db = getDb();
   return db
