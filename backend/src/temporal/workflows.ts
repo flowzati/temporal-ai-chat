@@ -49,31 +49,26 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   // 執行期佇列：Update 只入列，主循環負責出列處理
   const pendingQueue: { userMessage: string; completion: Trigger<string>; userId: string }[] = [];
 
-  // Helpers：統一回覆結束（不保留 recent 緩衝）
-  function finalize(item: { userMessage: string; completion: Trigger<string> }, assistantContent: string) {
-    item.completion.resolve(assistantContent);
-  }
-
   // Consolidated handlers：將各分支處理封裝，便於擴充與測試
   async function handleChat(item: { userMessage: string; completion: Trigger<string> }) {
     const reply = await acts.generateReply({ userMessage: item.userMessage });
-    finalize(item, reply);
+    item.completion.resolve(reply);
   }
 
   async function handleWeather(item: { userMessage: string; completion: Trigger<string> }) {
     const reply = await acts.generateReplyWithTools({ userMessage: item.userMessage });
-    finalize(item, reply);
+    item.completion.resolve(reply);
   }
 
   async function handleLedgerProposal(item: { userMessage: string; completion: Trigger<string>; userId: string }) {
     const ledger = await acts.parseLedgerProposal({ userId: item.userId, sessionId: startArgs.sessionId, text: item.userMessage, nowMs: Date.now() });
     const payload = JSON.stringify({ __kind: 'ledger_proposal', proposal: ledger.proposal, explain: ledger.explain });
-    finalize(item, payload);
+    item.completion.resolve(payload);
   }
 
   async function handleLedgerQuery(item: { userMessage: string; completion: Trigger<string>; userId: string }) {
     const ledger = await acts.queryLedgerRange({ userId: item.userId, text: item.userMessage, nowMs: Date.now() });
-    finalize(item, ledger.resultText);
+    item.completion.resolve(ledger.resultText);
   }
 
   // 初始化：可記錄初始搜尋屬性（目前關閉，保留示例）
@@ -108,7 +103,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     // 處理佇列（FIFO）
     while (pendingQueue.length > 0) {
       const item = pendingQueue.shift()!;
-
+      console.log('item', item);
       // 由 OpenAI 決策選擇功能：chat / weather / ledger_proposal / ledger_query（集中式路由）
       const capability = await acts.decideCapability({ text: item.userMessage });
       switch (capability) {
