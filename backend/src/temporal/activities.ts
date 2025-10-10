@@ -72,8 +72,6 @@ export async function generateReplyWithTools(args: GenerateReplyArgs): Promise<s
   return '（助理沒有回覆文字）';
 }
 
-// (removed) decideUseTools — superseded by decideCapability
-
 // ===== Ledger: parse intent =====
 export const LedgerProposalSchema = z.object({
   userId: z.string().min(1),
@@ -84,10 +82,8 @@ export const LedgerProposalSchema = z.object({
 });
 export type LedgerProposal = z.infer<typeof LedgerProposalSchema>;
 
-export async function parseLedgerIntent(args: { userId: string; sessionId?: string | null; text: string; nowMs?: number }): Promise<
-  | { type: 'none' }
-  | { type: 'proposal'; proposal: LedgerProposal; explain: string }
-  | { type: 'query'; resultText: string }
+export async function parseLedgerProposal(args: { userId: string; sessionId?: string | null; text: string; nowMs?: number }): Promise<
+  { proposal: LedgerProposal; explain: string }
 > {
   ensureOpenAI();
 
@@ -121,37 +117,85 @@ export async function parseLedgerIntent(args: { userId: string; sessionId?: stri
       const explain = `${proposal.title} ${amountCents >= 0 ? '+' : ''}${(proposal.amountCents / 100).toFixed(2)}，時間 ${new Date(
         proposal.occurredAtMs
       ).toLocaleString()}`;
-      return { type: 'proposal', proposal, explain };
+      return { proposal, explain };
     }
+    throw new Error('Not a ledger proposal');
+  } catch (err: any) {
+    throw new Error(`parseLedgerProposal failed: ${err?.message ?? 'unknown error'}`);
+  }
+}
+
+export async function queryLedgerRange(args: { userId: string; text: string; nowMs?: number }): Promise<
+  { resultText: string }
+> {
+  ensureOpenAI();
+
+  const now = new Date(args.nowMs ?? Date.now());
+  const agent = new Agent({
+    name: 'Ledger Query Parser',
+    instructions:
+      '你負責從中文或英文的查帳指令中抽取查詢區間。' +
+      '\n輸出 JSON 欄位 { kind: "query", range: "today"|"yesterday"|"date"|"month"|"week", date?: YYYY-MM-DD }。' +
+      `\n今天日期為 ${now.toISOString().slice(0, 10)}，時間請盡量解析成 ISO 日期時間。` +
+      '\n只輸出 JSON，勿加說明。',
+  });
+  const raw = String((await run(agent, args.text)).finalOutput || '').trim();
+  try {
+    const parsed = JSON.parse(raw);
     if (parsed?.kind === 'query') {
+      const base = new Date(now);
+      base.setHours(0, 0, 0, 0);
+
+      // 小工具：時間範圍計算（[start, end)）
+      const startOfDay = (d: Date) => {
+        const t = new Date(d);
+        t.setHours(0, 0, 0, 0);
+        return t;
+      };
+      const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 24 * 60 * 60 * 1000);
+      const startOfMonth = (d: Date) => {
+        const t = new Date(d);
+        t.setDate(1);
+        t.setHours(0, 0, 0, 0);
+        return t;
+      };
+      const addMonths = (d: Date, n: number) => {
+        const t = new Date(d);
+        t.setMonth(t.getMonth() + n);
+        return t;
+      };
+      const startOfWeekMon = (d: Date) => {
+        const t = startOfDay(d);
+        const day = t.getDay(); // 0 Sun .. 6 Sat
+        const diff = (day + 6) % 7; // Monday=0
+        return addDays(t, -diff);
+      };
+
       const range = String(parsed.range);
       let start: Date;
       let end: Date;
-      const base = new Date(now);
-      base.setHours(0, 0, 0, 0);
       if (range === 'today') {
-        start = new Date(base);
-        end = new Date(base);
-        end.setDate(end.getDate() + 1);
+        start = startOfDay(base);
+        end = addDays(start, 1);
       } else if (range === 'yesterday') {
-        end = new Date(base);
-        start = new Date(base);
-        start.setDate(start.getDate() - 1);
+        end = startOfDay(base);
+        start = addDays(end, -1);
       } else if (range === 'date') {
         const d = new Date(parsed.date);
-        start = new Date(d);
-        start.setHours(0, 0, 0, 0);
-        end = new Date(start);
-        end.setDate(end.getDate() + 1);
+        if (isNaN(d.getTime())) throw new Error('Invalid date');
+        start = startOfDay(d);
+        end = addDays(start, 1);
+      } else if (range === 'week') {
+        const d = parsed.date ? new Date(parsed.date) : base;
+        const weekStart = startOfWeekMon(d);
+        start = weekStart;
+        end = addDays(weekStart, 7);
       } else if (range === 'month') {
-        const d = parsed.date ? new Date(parsed.date + '-01') : new Date(base);
-        start = new Date(d);
-        start.setDate(1);
-        start.setHours(0, 0, 0, 0);
-        end = new Date(start);
-        end.setMonth(end.getMonth() + 1);
+        const d = parsed.date ? new Date(parsed.date + '-01') : base;
+        start = startOfMonth(d);
+        end = addMonths(start, 1);
       } else {
-        return { type: 'none' };
+        throw new Error('Unsupported range');
       }
 
       // 列出範圍內所有收入與支出，並計算加總
@@ -171,10 +215,12 @@ export async function parseLedgerIntent(args: { userId: string; sessionId?: stri
       const header = `範圍：${start.toISOString().slice(0, 10)} 至 ${end.toISOString().slice(0, 10)}\n收入：$${income}  支出：-$${expense}  淨額：$${net}`;
       const body = lines.length ? lines.join('\n') : '（無資料）';
       const text = `${header}\n${body}`;
-      return { type: 'query', resultText: text };
+      return { resultText: text };
     }
-  } catch {}
-  return { type: 'none' };
+    throw new Error('Not a ledger query');
+  } catch (err: any) {
+    throw new Error(`queryLedgerRange failed: ${err?.message ?? 'unknown error'}`);
+  }
 }
 
 export async function saveLedger(args: { proposal: LedgerProposal }): Promise<string> {
