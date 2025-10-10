@@ -1,12 +1,13 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, upsertSearchAttributes, continueAsNew, workflowInfo, condition, Trigger } from '@temporalio/workflow';
+import { Capability } from './activities';
 // 說明：本工作流採用 Entity/Virtual Actor 模式（每個 sessionId 對應一個長駐實體）。
 // - Workflow 僅負責決策與協調（決定性），所有 I/O 交由 Activities 執行（避免非決定性）。
 // - 以內存佇列 + condition 等待的方式串行處理訊息，確保順序與一致性。
 
-export interface Activities {
-  decideCapability: (args: { text: string }) => Promise<'chat' | 'weather' | 'ledger_proposal' | 'ledger_query'>;
-  generateReply: (args: { userMessage: string }) => Promise<string>;
-  generateReplyWithTools: (args: { userMessage: string }) => Promise<string>;
+export interface ChatActivities {
+  decideCapability: (args: { text: string }) => Promise<Capability>;
+  chatReply: (args: { userMessage: string }) => Promise<string>;
+  weatherReply: (args: { userMessage: string }) => Promise<string>;
   saveLedger: (args: { proposal: { userId: string; sessionId?: string | null; title: string; amountCents: number; occurredAtMs: number } }) => Promise<string>;
   parseLedgerProposal: (args: { userId: string; sessionId?: string | null; text: string; nowMs?: number }) => Promise<
     { proposal: { userId: string; sessionId?: string | null; title: string; amountCents: number; occurredAtMs: number }; explain: string }
@@ -15,16 +16,17 @@ export interface Activities {
 }
 
 // 代理活動：定義在 Worker 執行的函式（OpenAI、DB 存取等 I/O）
-const acts = proxyActivities<Activities>({
+const acts = proxyActivities<ChatActivities>({
   startToCloseTimeout: '1 minute',
-  retry: { maximumAttempts: 5, backoffCoefficient: 2 },
+  retry: {
+    maximumAttempts: 5,
+    backoffCoefficient: 2
+  },
 });
 
 export interface StartSessionArgs {
   sessionId: string; // 會話 ID（實體主鍵）
   startedAtMs: number; // 工作流起始時間（決定性來源於伺服器）
-  // 小型內存佇列狀態（可選，供 ContinueAsNew 繼承）
-  recentMessages?: { role: 'user' | 'assistant'; content: string }[];
 }
 
 export interface SendMessageArgs {
@@ -51,12 +53,12 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
 
   // Consolidated handlers：將各分支處理封裝，便於擴充與測試
   async function handleChat(item: { userMessage: string; completion: Trigger<string> }) {
-    const reply = await acts.generateReply({ userMessage: item.userMessage });
+    const reply = await acts.chatReply({ userMessage: item.userMessage });
     item.completion.resolve(reply);
   }
 
   async function handleWeather(item: { userMessage: string; completion: Trigger<string> }) {
-    const reply = await acts.generateReplyWithTools({ userMessage: item.userMessage });
+    const reply = await acts.weatherReply({ userMessage: item.userMessage });
     item.completion.resolve(reply);
   }
 
@@ -90,9 +92,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   });
 
   // 保持工作流存活，等待更新（Updates）
-  // 工作流在 sleep 期間仍能接收並處理 Update
   // 若要釋出資源，可設計閒置逾時後關閉或 ContinueAsNew
-  // 這裡先簡化以長時間 sleep 方式維持存活
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const info = workflowInfo();

@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { Agent, run, tool } from '@openai/agents';
+import { Agent, run } from '@openai/agents';
 import { setDefaultOpenAIKey } from '@openai/agents-openai';
 import { insertLedgerEntry, listLedgerEntriesByRange, LedgerEntryRow } from '../utils/db';
 
-export interface GenerateReplyArgs {
+export interface ChatReplyArgs {
   userMessage: string;
 }
 
@@ -41,7 +41,7 @@ export async function decideCapability(args: { text: string }): Promise<Capabili
 }
 
 // 使用 @openai/agents 產生回覆（在 worker 執行）
-export async function generateReply(args: GenerateReplyArgs): Promise<string> {
+export async function chatReply(args: ChatReplyArgs): Promise<string> {
   ensureOpenAI();
 
   // 建立一個簡潔的聊天 Agent（可根據需求調整模型與設定）
@@ -58,39 +58,33 @@ export async function generateReply(args: GenerateReplyArgs): Promise<string> {
 }
 
 // 使用工具的 Agent（加入天氣查詢）
-export async function generateReplyWithTools(args: GenerateReplyArgs): Promise<string> {
+export async function weatherReply(args: ChatReplyArgs): Promise<string> {
+  // 改為專責天氣回覆（不使用 tools）
   ensureOpenAI();
-
-  const WeatherParams = z.object({
-    city: z.string().describe('城市名稱，例如 Taipei'),
+  const CitySchema = z.object({ city: z.string().min(1) });
+  const extractor = new Agent({
+    name: 'City Extractor',
+    instructions: '從使用者訊息中抽取欲查詢天氣的城市，只輸出 JSON：{"city":"Taipei"}；若無則 {"city":""}。',
   });
-
-  const weatherTool = tool({
-    name: 'weather',
-    description: '查詢某城市的即時氣溫與天氣狀況',
-    parameters: WeatherParams,
-    execute: async (input) => {
-      const { city } = WeatherParams.parse(input);
-      console.log('weatherTool', input);
-      const res = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1`).then((r) => r.json() as any);
-      const weather = res?.current_condition?.[0];
-      if (!weather) return `無法取得 ${city} 的天氣資訊`;
-      const desc = weather.weatherDesc?.[0]?.value ?? '';
-      const temp = weather.temp_C ?? '?';
-      return `${city} 現在約 ${temp}°C，天氣狀況：${desc}`;
-    },
-  });
-
-  const agent = new Agent({
-    name: 'Tool-enabled Chat Agent',
-    instructions: '你是有工具可用的助理，必要時可呼叫 weather 取得天氣。',
-    tools: [weatherTool],
-  });
-
-  const result = await run(agent, args.userMessage);
-  const out = result.finalOutput;
-  if (typeof out === 'string') return out;
-  return '（助理沒有回覆文字）';
+  const raw = String((await run(extractor, args.userMessage)).finalOutput || '').trim();
+  let city = '';
+  try {
+    const parsed = CitySchema.safeParse(JSON.parse(raw));
+    city = parsed.success ? parsed.data.city : '';
+  } catch {
+    city = '';
+  }
+  if (!city) return '請提供要查詢天氣的城市名稱，例如：台北天氣如何？';
+  try {
+    const res = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1`).then((r) => r.json() as any);
+    const weather = res?.current_condition?.[0];
+    if (!weather) return `無法取得 ${city} 的天氣資訊`;
+    const desc = weather.weatherDesc?.[0]?.value ?? '';
+    const temp = weather.temp_C ?? '?';
+    return `${city} 現在約 ${temp}°C，天氣狀況：${desc}`;
+  } catch (err: any) {
+    return `查詢 ${city} 天氣時發生錯誤：${err?.message ?? '未知錯誤'}`;
+  }
 }
 
 // ===== Ledger: parse intent =====
