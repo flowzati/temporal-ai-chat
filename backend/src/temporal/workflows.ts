@@ -1,5 +1,5 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
-import { Capability, SendMessageArgs, SaveLedgerInput, StartSessionArgs, ConfirmLedgerArgs, QueueItem, ParsedLedgerProposalFlat } from '../types';
+import { Capability, SendMessageArgs, SaveLedgerInput, StartSessionArgs, ConfirmLedgerArgs, QueueItem, ParsedLedgerProposalResult } from '../types';
 
 // 說明：本工作流採用 Entity/Virtual Actor 模式（每個 sessionId 對應一個長駐實體）。
 // - Workflow 僅負責決策與協調（決定性），所有 I/O 交由 Activities 執行（避免非決定性）。
@@ -9,7 +9,7 @@ export interface ChatActivities {
   chatReply: (userMessage: string) => Promise<string>;
   weatherReply: (userMessage: string) => Promise<string>;
   saveLedger: (args: SaveLedgerInput) => Promise<string>;
-  parseLedgerProposal: (args: SendMessageArgs) => Promise<ParsedLedgerProposalFlat>;
+  parseLedgerProposal: (args: SendMessageArgs) => Promise<ParsedLedgerProposalResult>;
   queryLedgerRange: (args: SendMessageArgs) => Promise<string>;
 }
 

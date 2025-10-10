@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { Agent, run } from '@openai/agents';
 import { setDefaultOpenAIKey } from '@openai/agents-openai';
-import { computeLedgerRange, buildLedgerProposalFields } from '../utils/ledger';
-import { Capability, ParsedLedgerProposalFlat, SendMessageArgs, LedgerQueryRangeResult, LedgerRangeInput } from '../types';
+import * as ledger from '../utils/ledger';
+import { Capability, ParsedLedgerProposalResult, LedgerQueryRangeResult, LedgerRangeInput } from '../types';
 
 const EnvSchema = z.object({ OPENAI_API_KEY: z.string().min(1) });
 
@@ -65,7 +65,7 @@ export async function weatherReply(userMessage: string): Promise<string> {
   return `${city} 現在約 ${temp}°C，天氣狀況：${desc}`;
 }
 
-export async function parseLedgerProposal(userMessage: string, userId: string, sessionId: string | null): Promise<ParsedLedgerProposalFlat> {
+export async function parseLedgerProposal(userMessage: string, userId: string, sessionId: string | null): Promise<ParsedLedgerProposalResult> {
   const now = new Date();
   const agent = new Agent({
     name: 'Ledger Parser',
@@ -81,7 +81,7 @@ export async function parseLedgerProposal(userMessage: string, userId: string, s
   const raw = String((await run(agent, userMessage)).finalOutput || '').trim();
   const parsed = JSON.parse(raw);
   if (parsed?.kind === 'add' || parsed?.kind === 'sub') {
-    const built = buildLedgerProposalFields({ parsed, userId: userId, sessionId: sessionId ?? null, now });
+    const built = ledger.buildLedgerProposalFields({ parsed, userId: userId, sessionId: sessionId ?? null, now });
     return {
       userId: built.userId,
       sessionId: built.sessionId,
@@ -110,7 +110,7 @@ export async function queryLedgerRange(userMessage: string): Promise<LedgerQuery
   const parsed = JSON.parse(raw);
   if (parsed?.kind === 'query') {
     const range = parsed.range as LedgerRangeInput['range'];
-    const { start, end } = computeLedgerRange({ range, date: parsed.date }, now);
+    const { start, end } = ledger.computeLedgerRange({ range, date: parsed.date }, now);
     return { startMs: start.getTime(), endMs: end.getTime() };
   }
   throw new Error('Not a ledger query');

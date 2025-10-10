@@ -1,5 +1,10 @@
 import { Trigger } from '@temporalio/workflow';
 import { z } from 'zod';
+
+export interface StartSessionArgs {
+  sessionId: string;
+  startedAtMs: number;
+}
 export interface ChatBase {
   userId: string;
   sessionId: string | undefined | null;
@@ -10,11 +15,6 @@ export interface UserMessage extends ChatBase {
 }
 
 export interface SendMessageArgs extends UserMessage {
-  startedAtMs: number;
-}
-
-export interface StartSessionArgs {
-  sessionId: string;
   startedAtMs: number;
 }
 
@@ -32,7 +32,7 @@ export interface SaveLedgerInput extends ChatBase {
   occurredAtMs: number;
 }
 
-export interface ParsedLedgerProposalFlat extends ChatBase {
+export interface ParsedLedgerProposalResult extends ChatBase {
   title: string;
   amountCents: number;
   occurredAtMs: number;
@@ -44,28 +44,12 @@ export interface LedgerQueryRangeResult {
   endMs: number;
 }
 
-// ===== Ledger: parse intent =====
-export const LedgerProposalSchema = z.object({
-  userId: z.string().min(1),
-  sessionId: z.string().optional().nullable(),
-  title: z.string().min(1),
-  amountCents: z.number().int(),
-  occurredAtMs: z.number().int(),
-});
-export type LedgerProposal = z.infer<typeof LedgerProposalSchema>;
-
-export interface ParseLedgerProposalResult {
-  proposal: LedgerProposal;
-  explain: string;
-}
-
 export type Capability = 'chat' | 'weather' | 'ledger_proposal' | 'ledger_query';
 
 export interface LedgerRangeInput {
   range: 'today' | 'yesterday' | 'date' | 'month' | 'week';
   date?: string; // YYYY-MM-DD for date/month/week when specified
 }
-
 
 // Ledger helpers
 export interface LedgerEntryRow {

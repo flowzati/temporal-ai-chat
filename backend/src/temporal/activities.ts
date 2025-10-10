@@ -1,9 +1,7 @@
-import { ParsedLedgerProposalFlat, Capability, SendMessageArgs, LedgerProposal, LedgerQueryRangeResult, LedgerEntryRow } from '../types';
+import { ParsedLedgerProposalResult, Capability, SendMessageArgs, SaveLedgerInput, LedgerQueryRangeResult, LedgerEntryRow } from '../types';
 import * as ledger from '../utils/ledger';
 import * as db from '../utils/db';
-import * as ai from '../services/ai';
-
-// activities 僅作為輕薄代理，重邏輯在 services/ai.ts
+import * as ai from '../utils/ai';
 
 // 決策可用功能：聊天、查天氣、記帳、查帳
 export async function decideCapability(text: string): Promise<Capability> {
@@ -32,7 +30,7 @@ export async function weatherReply(userMessage: string): Promise<string> {
   }
 }
 
-export async function parseLedgerProposal(args: SendMessageArgs): Promise<ParsedLedgerProposalFlat> {
+export async function parseLedgerProposal(args: SendMessageArgs): Promise<ParsedLedgerProposalResult> {
   try {
     return await ai.parseLedgerProposal(args.userMessage, args.userId, args.sessionId ?? null);
   } catch (err: any) {
@@ -50,7 +48,7 @@ export async function queryLedgerRange(args: SendMessageArgs): Promise<string> {
   }
 }
 
-export async function saveLedger(proposal: LedgerProposal): Promise<string> {
+export async function saveLedger(proposal: SaveLedgerInput): Promise<string> {
   try {
     db.insertLedgerEntry({
       userId: proposal.userId,
