@@ -53,6 +53,16 @@ function migrate(db: Db) {
       FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at_ms);
+    CREATE TABLE IF NOT EXISTS ledger_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      session_id TEXT,
+      title TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      occurred_at_ms INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ledger_user_occurred ON ledger_entries(user_id, occurred_at_ms);
   `);
 }
 
@@ -90,6 +100,48 @@ export function sessionExists(sessionId: string): boolean {
   const db = getDb();
   const row = db.prepare('SELECT 1 FROM sessions WHERE session_id = ?').get(sessionId) as { 1?: number } | undefined;
   return !!row;
+}
+
+// Ledger helpers
+export interface LedgerEntryRow {
+  id: number;
+  user_id: string;
+  session_id: string | null;
+  title: string;
+  amount_cents: number; // 正為加項，負為減項
+  occurred_at_ms: number;
+  created_at_ms: number;
+}
+
+export function insertLedgerEntry(params: {
+  userId: string;
+  sessionId?: string | null;
+  title: string;
+  amountCents: number;
+  occurredAtMs: number;
+  createdAtMs: number;
+}): void {
+  const db = getDb();
+  db.prepare(
+    'INSERT INTO ledger_entries (user_id, session_id, title, amount_cents, occurred_at_ms, created_at_ms) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(params.userId, params.sessionId ?? null, params.title, params.amountCents, params.occurredAtMs, params.createdAtMs);
+}
+
+export function listLedgerEntriesByRange(userId: string, startMs: number, endMs: number): LedgerEntryRow[] {
+  const db = getDb();
+  return db
+    .prepare(
+      'SELECT id, user_id, session_id, title, amount_cents, occurred_at_ms, created_at_ms FROM ledger_entries WHERE user_id = ? AND occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms ASC'
+    )
+    .all(userId, startMs, endMs) as LedgerEntryRow[];
+}
+
+export function sumLedgerEntriesByRange(userId: string, startMs: number, endMs: number): number {
+  const db = getDb();
+  const row = db
+    .prepare('SELECT COALESCE(SUM(amount_cents), 0) as total FROM ledger_entries WHERE user_id = ? AND occurred_at_ms >= ? AND occurred_at_ms < ?')
+    .get(userId, startMs, endMs) as { total: number };
+  return row?.total ?? 0;
 }
 
 

@@ -30,6 +30,10 @@ export function App() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const messagesBoxRef = useRef<HTMLDivElement | null>(null);
+  const [pendingLedger, setPendingLedger] = useState<null | {
+    explain: string;
+    proposal: { title: string; amountCents: number; occurredAtMs: number };
+  }>(null);
   // 中文輸入法組字狀態（避免組字時 Enter 觸發送出）
   const composingRef = useRef(false);
 
@@ -45,6 +49,15 @@ export function App() {
       try {
         const data = JSON.parse(String(evt.data));
         if (data?.type === 'assistant_message') {
+          // 嘗試解析是否為 ledger_proposal
+          try {
+            const parsed = JSON.parse(String(data.message));
+            if (parsed?.__kind === 'ledger_proposal' && parsed?.proposal) {
+              setPendingLedger({ explain: String(parsed.explain ?? ''), proposal: parsed.proposal });
+              setMessages((prev) => [...prev, { role: 'assistant', content: parsed.explain ?? '請確認記帳' }]);
+              return;
+            }
+          } catch {}
           setMessages((prev) => [...prev, { role: 'assistant', content: data.message }]);
         } else if (data?.type === 'error') {
           setMessages((prev) => [...prev, { role: 'system', content: `錯誤：${data.error}` }]);
@@ -116,6 +129,23 @@ export function App() {
     wsRef.current.send(JSON.stringify(payload));
     setMessages((prev) => [...prev, { role: 'user', content: input.trim() }]);
     setInput('');
+  }
+
+  function confirmLedger() {
+    if (!wsRef.current || !pendingLedger) return;
+    const payload = {
+      type: 'confirm_ledger',
+      sessionId,
+      userId,
+      proposal: pendingLedger.proposal,
+    };
+    wsRef.current.send(JSON.stringify(payload));
+    setPendingLedger(null);
+  }
+
+  function cancelLedger() {
+    setPendingLedger(null);
+    setMessages((prev) => [...prev, { role: 'system', content: '已取消記帳' }]);
   }
 
   return (
@@ -209,6 +239,16 @@ export function App() {
               </div>
             );
           })}
+
+          {pendingLedger && (
+            <div style={{ marginTop: 12, padding: 12, border: '1px dashed #cbd5e1', borderRadius: 8, background: '#f8fafc' }}>
+              <div style={{ marginBottom: 8 }}>{pendingLedger.explain || '請確認記帳'}</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={confirmLedger} style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6 }}>確認記帳</button>
+                <button onClick={cancelLedger} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 6 }}>取消</button>
+              </div>
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <input

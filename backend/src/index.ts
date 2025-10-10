@@ -111,6 +111,21 @@ async function main() {
           insertMessage(sessionId, 'assistant', reply, Date.now());
 
           ws.send(JSON.stringify({ type: 'assistant_message', sessionId, userId: args.userId, message: reply }));
+        } else if (data?.type === 'confirm_ledger') {
+          const sessionId = String(data.sessionId ?? 'unknown');
+          const userId = String(data.userId ?? 'anonymous');
+          const proposal = data.proposal;
+          if (!proposal || typeof proposal?.title !== 'string' || typeof proposal?.amountCents !== 'number' || typeof proposal?.occurredAtMs !== 'number') {
+            ws.send(JSON.stringify({ type: 'error', error: 'Invalid proposal' }));
+            return;
+          }
+
+          const sessionHandle = await ensureSessionWorkflow(temporalClient, sessionId, Date.now());
+          const reply: string = await sessionHandle.executeUpdate('confirmLedger', {
+            args: [{ userId, sessionId, proposal }],
+          });
+
+          ws.send(JSON.stringify({ type: 'assistant_message', sessionId, userId, message: reply }));
         }
       } catch (err: any) {
         ws.send(JSON.stringify({ type: 'error', error: err?.message ?? 'Unknown error' }));
