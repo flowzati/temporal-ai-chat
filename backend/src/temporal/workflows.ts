@@ -1,5 +1,5 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
-import { Capability, SendMessageArgs, SaveLedgerInput, StartSessionArgs, ConfirmLedgerArgs, QueueItem, ParsedLedgerProposalResult } from '../types';
+import { Capability, SendMessageArgs, SaveLedgerInput, StartSessionArgs, ConfirmLedgerArgs, QueueItem, ParsedLedgerProposalResult, SaveMessageArgs, InitializeSessionArgs } from '../types';
 
 // 說明：本工作流採用 Entity/Virtual Actor 模式（每個 sessionId 對應一個長駐實體）。
 // - Workflow 僅負責決策與協調（決定性），所有 I/O 交由 Activities 執行（避免非決定性）。
@@ -11,6 +11,8 @@ export interface ChatActivities {
   saveLedger: (args: SaveLedgerInput) => Promise<string>;
   parseLedgerProposal: (args: SendMessageArgs) => Promise<ParsedLedgerProposalResult>;
   queryLedgerRange: (args: SendMessageArgs) => Promise<string>;
+  saveMessage: (params: SaveMessageArgs) => Promise<void>;
+  initializeSession: (params: InitializeSessionArgs) => Promise<void>;
 }
 
 // 代理活動：定義在 Worker 執行的函式（OpenAI、DB 存取等 I/O）
@@ -34,6 +36,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   // 執行期佇列：Update 只入列，主循環負責出列處理
   const pendingQueue: QueueItem[] = [];
   let currentScope: CancellationScope | null = null;
+  let sessionInitialized = false; // 記錄 session 是否已初始化（避免重複 DB 查詢）
 
   // Update：將訊息入列並等待主循環處理結果（以 Trigger 實現 deferred）
   setHandler(sendMessageUpdate, async (args: SendMessageArgs): Promise<string> => {
@@ -65,13 +68,33 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     currentScope?.cancel();
   });
 
-  async function dispatchByCapability(item: QueueItem): Promise<void> {
+  async function processMessage(item: QueueItem): Promise<void> {
+    // 1. 初始化 session（只在第一條訊息時執行）
+    if (!sessionInitialized) {
+      await acts.initializeSession({
+        sessionId: item.sessionId,
+        title: item.userMessage, // 首條訊息作為 session 標題
+        timestamp: item.startedAtMs
+      });
+      sessionInitialized = true;
+    }
+    
+    // 2. 保存用戶訊息到 DB
+    await acts.saveMessage({
+      sessionId: item.sessionId,
+      role: 'user',
+      content: item.userMessage,
+      timestamp: item.startedAtMs
+    });
+    
+    // 3. 根據能力分發處理
     const capability = await acts.decideCapability(item.userMessage);
+    let reply: string;
+    
     switch (capability) {
       case 'weather': {
-        const reply = await acts.weatherReply(item.userMessage);
-        item.completion.resolve(reply);
-        return;
+        reply = await acts.weatherReply(item.userMessage);
+        break;
       }
       case 'ledger_proposal': {
         console.log('parseLedgerProposal', item);
@@ -81,7 +104,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
           userMessage: item.userMessage,
           startedAtMs: item.startedAtMs
         });
-        const payload = JSON.stringify({
+        reply = JSON.stringify({
           __kind: 'ledger_proposal',
           proposal: {
             userId: ledger.userId,
@@ -92,21 +115,29 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
           },
           explain: ledger.explain
         });
-        item.completion.resolve(payload);
-        return;
+        break;
       }
       case 'ledger_query': {
-        const resultText = await acts.queryLedgerRange(item);
-        item.completion.resolve(resultText);
-        return;
+        reply = await acts.queryLedgerRange(item);
+        break;
       }
       case 'chat':
       default: {
-        const reply = await acts.chatReply(item.userMessage);
-        item.completion.resolve(reply);
-        return;
+        reply = await acts.chatReply(item.userMessage);
+        break;
       }
     }
+    
+    // 4. 保存 AI 回覆到 DB
+    await acts.saveMessage({
+      sessionId: item.sessionId,
+      role: 'assistant',
+      content: reply,
+      timestamp: Date.now()
+    });
+    
+    // 5. 返回結果給調用者
+    item.completion.resolve(reply);
   }
 
   // 保持工作流存活，等待更新（Updates）
@@ -122,18 +153,42 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
       const item = pendingQueue.shift()!;
       try {
         currentScope = new CancellationScope();
-        await currentScope.run(() => dispatchByCapability(item));
+        await currentScope.run(() => processMessage(item));
       } catch (err: any) {
         if (isCancellation(err)) {
           item.completion.resolve('已取消');
+          
+          // 保存取消訊息到 DB
+          try {
+            await acts.saveMessage({
+              sessionId: item.sessionId,
+              role: 'system',
+              content: '已取消',
+              timestamp: Date.now()
+            });
+          } catch {}
           continue;
         }
-        const msg = String(err?.message ?? '');
-        if (msg.includes('Not a ledger') || msg.includes('Invalid date') || msg.includes('Unsupported range')) {
-          item.completion.resolve(`處理失敗：${msg}`);
-          continue;
+        
+        // 錯誤處理
+        const msg = String(err?.message ?? 'Unknown error');
+        const errorMsg = msg.includes('Not a ledger') || msg.includes('Invalid date') || msg.includes('Unsupported range')
+          ? `處理失敗：${msg}`
+          : `系統錯誤：${msg}`;
+        
+        // 保存錯誤訊息到 DB
+        try {
+          await acts.saveMessage({
+            sessionId: item.sessionId,
+            role: 'system',
+            content: errorMsg,
+            timestamp: Date.now()
+          });
+        } catch (saveErr: any) {
+          console.error('Failed to save error message:', saveErr);
         }
-        throw err;
+        
+        item.completion.resolve(errorMsg);
       } finally {
         currentScope = null;
       }

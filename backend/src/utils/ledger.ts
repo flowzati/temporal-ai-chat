@@ -96,9 +96,9 @@ export function formatLedgerSummary(entries: LedgerEntryRow[], start: Date, end:
 export function buildLedgerProposalFields(params: {
   parsed: { kind: 'add' | 'sub'; item: string; amount: number; occurredAt: string };
   userId: string;
-  sessionId: string | null;
+  sessionId: string;
   now: Date;
-}): { userId: string; sessionId: string | null; title: string; amountCents: number; occurredAtMs: number; explain: string } {
+}): { userId: string; sessionId: string; title: string; amountCents: number; occurredAtMs: number; explain: string } {
   const { parsed, userId, sessionId, now } = params;
   const sign = parsed.kind === 'add' ? 1 : -1;
   const amountCents = Math.round(Number(parsed.amount) * 100) * sign;

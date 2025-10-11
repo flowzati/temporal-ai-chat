@@ -65,7 +65,7 @@ export async function weatherReply(userMessage: string): Promise<string> {
   return `${city} 現在約 ${temp}°C，天氣狀況：${desc}`;
 }
 
-export async function parseLedgerProposal(userMessage: string, userId: string, sessionId: string | null): Promise<ParsedLedgerProposalResult> {
+export async function parseLedgerProposal(userMessage: string, userId: string, sessionId: string): Promise<ParsedLedgerProposalResult> {
   const now = new Date();
   const agent = new Agent({
     name: 'Ledger Parser',
@@ -81,7 +81,7 @@ export async function parseLedgerProposal(userMessage: string, userId: string, s
   const raw = String((await run(agent, userMessage)).finalOutput || '').trim();
   const parsed = JSON.parse(raw);
   if (parsed?.kind === 'add' || parsed?.kind === 'sub') {
-    const built = ledger.buildLedgerProposalFields({ parsed, userId: userId, sessionId: sessionId ?? null, now });
+    const built = ledger.buildLedgerProposalFields({ parsed, userId: userId, sessionId: sessionId, now });
     return {
       userId: built.userId,
       sessionId: built.sessionId,

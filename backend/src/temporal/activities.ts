@@ -1,4 +1,4 @@
-import { ParsedLedgerProposalResult, Capability, SendMessageArgs, SaveLedgerInput, LedgerQueryRangeResult, LedgerEntryRow } from '../types';
+import { ParsedLedgerProposalResult, Capability, SendMessageArgs, SaveLedgerInput, LedgerQueryRangeResult, LedgerEntryRow, InitializeSessionArgs, SaveMessageArgs } from '../types';
 import * as ledger from '../utils/ledger';
 import * as db from '../utils/db';
 import * as ai from '../utils/ai';
@@ -32,7 +32,7 @@ export async function weatherReply(userMessage: string): Promise<string> {
 
 export async function parseLedgerProposal(args: SendMessageArgs): Promise<ParsedLedgerProposalResult> {
   try {
-    return await ai.parseLedgerProposal(args.userMessage, args.userId, args.sessionId ?? null);
+    return await ai.parseLedgerProposal(args.userMessage, args.userId, args.sessionId);
   } catch (err: any) {
     throw new Error(`parseLedgerProposal failed: ${err?.message ?? 'unknown error'}`);
   }
@@ -61,5 +61,27 @@ export async function saveLedger(proposal: SaveLedgerInput): Promise<string> {
     return '已存入記帳';
   } catch (err: any) {
     throw new Error(`saveLedger failed: ${err?.message ?? 'unknown error'}`);
+  }
+}
+
+/**
+ * 保存訊息到 DB
+ */
+export async function saveMessage(params: SaveMessageArgs): Promise<void> {
+  try {
+    db.insertMessage(params.sessionId, params.role, params.content, params.timestamp);
+  } catch (err: any) {
+    throw new Error(`saveMessage failed: ${err?.message ?? 'unknown error'}`);
+  }
+}
+
+/**
+ * 初始化 session（僅在首次使用時調用）
+ */
+export async function initializeSession(params: InitializeSessionArgs): Promise<void> {
+  try {
+    db.upsertSession(params.sessionId, params.title, params.timestamp);
+  } catch (err: any) {
+    throw new Error(`initializeSession failed: ${err?.message ?? 'unknown error'}`);
   }
 }

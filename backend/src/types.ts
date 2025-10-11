@@ -7,7 +7,7 @@ export interface StartSessionArgs {
 }
 export interface ChatBase {
   userId: string;
-  sessionId: string | undefined | null;
+  sessionId: string;
 }
 
 export interface UserMessage extends ChatBase {
@@ -60,4 +60,17 @@ export interface LedgerEntryRow {
   amount_cents: number; // 正為加項，負為減項
   occurred_at_ms: number;
   created_at_ms: number;
+}
+
+export interface SaveMessageArgs {
+  sessionId: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+}
+
+export interface InitializeSessionArgs {
+  sessionId: string;
+  title: string | null;
+  timestamp: number;
 }
