@@ -81,30 +81,40 @@ async function createWorkflow(
 }
 
 /**
+ * @param data {
+ *  type: 'user_message' | 'confirm_ledger' | 'cancel';
+ *  sessionId: string;
+ *  userId: string;
+ *  message: string;
+ * }
  * 处理用户消息（優化版：移除 DB 操作，由 workflow 處理）
  */
 async function handleUserMessage(data: any, context: MessageHandlerContext): Promise<void> {
+  console.log('handleUserMessage', data);
   const { temporalClient, ws, workflowHandleCache } = context;
-  let sessionId = String(data.sessionId ?? 'unknown');
-  
-  // 檢測是否需要創建新 session
-  const isNewSession = sessionId === 'new' || sessionId === '' || sessionId === 'unknown';
-  if (isNewSession) {
-    sessionId = randomUUID(); // 生成新的 UUID
-    console.log(`[handleUserMessage] Created new session: ${sessionId}`);
+  // validate data
+  if (!data.type || !data.userId || !data.message) {
+    console.log('[handleUserMessage] Invalid message data');
+    ws.send(JSON.stringify({ type: 'error', error: 'Invalid message data' }));
+    return;
   }
-  
-  const args: UserMessage = {
-    userId: String(data.userId ?? 'anonymous'),
-    sessionId: sessionId,
-    userMessage: String(data.message ?? '')
-  };
-
-  if (!args.userMessage) {
+  if (!data.message) {
     console.log('[handleUserMessage] Empty message rejected');
     ws.send(JSON.stringify({ type: 'error', error: 'Empty message' }));
     return;
   }
+  let sessionId = data.sessionId;
+  // 檢測是否需要創建新 session
+  const isNewSession = sessionId === 'new' || sessionId === '' || !sessionId;
+  if (isNewSession) {
+    sessionId = randomUUID(); // 生成新的 UUID
+    console.log(`[handleUserMessage] Created new session: ${sessionId}`);
+  }
+  const userMessage: UserMessage = {
+    userId: data.userId,
+    sessionId: sessionId,
+    text: data.message
+  };
 
   const now = Date.now();
 
@@ -116,7 +126,7 @@ async function handleUserMessage(data: any, context: MessageHandlerContext): Pro
     let reply: string;
     try {
       reply = await sessionHandle.executeUpdate('sendMessage', { 
-        args: [{ ...args, startedAtMs: now }] 
+        args: [{ ...userMessage, startedAtMs: now }] 
       });
     } catch (error: any) {
       // 如果 workflow 不存在，創建它然後重試
@@ -126,7 +136,7 @@ async function handleUserMessage(data: any, context: MessageHandlerContext): Pro
         
         // 重試
         reply = await sessionHandle.executeUpdate('sendMessage', { 
-          args: [{ ...args, startedAtMs: now }] 
+          args: [{ ...userMessage, startedAtMs: now }] 
         });
       } else {
         throw error;
@@ -137,7 +147,7 @@ async function handleUserMessage(data: any, context: MessageHandlerContext): Pro
     ws.send(JSON.stringify({ 
       type: 'assistant_message', 
       sessionId: sessionId,
-      userId: args.userId, 
+      userId: userMessage.userId, 
       message: reply,
       isNewSession
     }));

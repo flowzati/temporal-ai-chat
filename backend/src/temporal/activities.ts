@@ -32,7 +32,7 @@ export async function weatherReply(userMessage: string): Promise<string> {
 
 export async function parseLedgerProposal(args: SendMessageArgs): Promise<ParsedLedgerProposalResult> {
   try {
-    return await ai.parseLedgerProposal(args.userMessage, args.userId, args.sessionId);
+    return await ai.parseLedgerProposal(args.text, args.userId, args.sessionId);
   } catch (err: any) {
     throw new Error(`parseLedgerProposal failed: ${err?.message ?? 'unknown error'}`);
   }
@@ -40,7 +40,7 @@ export async function parseLedgerProposal(args: SendMessageArgs): Promise<Parsed
 
 export async function queryLedgerRange(args: SendMessageArgs): Promise<string> {
   try {
-    const range: LedgerQueryRangeResult = await ai.queryLedgerRange(args.userMessage);
+    const range: LedgerQueryRangeResult = await ai.queryLedgerRange(args.text);
     const entries: LedgerEntryRow[] = db.listLedgerEntriesByRange(args.userId, range.startMs, range.endMs);
     return ledger.formatLedgerSummary(entries, new Date(range.startMs), new Date(range.endMs));
   } catch (err: any) {

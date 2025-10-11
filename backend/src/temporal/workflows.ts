@@ -45,7 +45,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     pendingQueue.push({
       userId: args.userId,
       sessionId: args.sessionId,
-      userMessage: args.userMessage,
+      text: args.text,
       startedAtMs: args.startedAtMs,
       completion
     });
@@ -73,7 +73,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     if (!sessionInitialized) {
       await acts.initializeSession({
         sessionId: item.sessionId,
-        title: item.userMessage, // 首條訊息作為 session 標題
+        title: item.text, // 首條訊息作為 session 標題
         timestamp: item.startedAtMs
       });
       sessionInitialized = true;
@@ -83,17 +83,17 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     await acts.saveMessage({
       sessionId: item.sessionId,
       role: 'user',
-      content: item.userMessage,
+      content: item.text,
       timestamp: item.startedAtMs
     });
     
     // 3. 根據能力分發處理
-    const capability = await acts.decideCapability(item.userMessage);
+    const capability = await acts.decideCapability(item.text);
     let reply: string;
     
     switch (capability) {
       case 'weather': {
-        reply = await acts.weatherReply(item.userMessage);
+        reply = await acts.weatherReply(item.text);
         break;
       }
       case 'ledger_proposal': {
@@ -101,7 +101,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
         const ledger = await acts.parseLedgerProposal({
           userId: item.userId,
           sessionId: item.sessionId,
-          userMessage: item.userMessage,
+          text: item.text,
           startedAtMs: item.startedAtMs
         });
         reply = JSON.stringify({
@@ -123,7 +123,7 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
       }
       case 'chat':
       default: {
-        reply = await acts.chatReply(item.userMessage);
+        reply = await acts.chatReply(item.text);
         break;
       }
     }

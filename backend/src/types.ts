@@ -11,7 +11,7 @@ export interface ChatBase {
 }
 
 export interface UserMessage extends ChatBase {
-  userMessage: string;
+  text: string;
 }
 
 export interface SendMessageArgs extends UserMessage {
