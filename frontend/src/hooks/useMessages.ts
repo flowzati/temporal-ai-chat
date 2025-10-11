@@ -10,7 +10,7 @@ interface UseMessagesResult {
 
 export function useMessages(
   apiUrl: string,
-  sessionId: string
+  sessionId: string | null
 ): UseMessagesResult {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'system', content: '歡迎使用 Temporal AI Chat。' },
@@ -19,7 +19,13 @@ export function useMessages(
 
   useEffect(() => {
     async function loadMessagesForSession() {
-      if (!sessionId) return;
+      // 如果沒有 sessionId 或是新 session，不載入
+      if (!sessionId || sessionId === 'new') {
+        setMessages([{ role: 'system', content: '新會話，開始聊天吧。' }]);
+        setPendingLedger(null);
+        return;
+      }
+      
       try {
         const res = await fetch(`${apiUrl}/api/sessions/${sessionId}/messages`);
         const json = await res.json();

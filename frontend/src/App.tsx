@@ -9,9 +9,7 @@ export function App() {
   const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
 
   // 狀態管理
-  const [sessionId, setSessionId] = useState(() =>
-    Math.random().toString(36).slice(2)
-  );
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [userId] = useState('demo-user');
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -24,15 +22,16 @@ export function App() {
   const { input, setInput, waitingReply, canSend, sendMessage, cancelAll } =
     useChat({
       wsRef,
-      sessionId,
+      sessionId: sessionId || 'new',
       userId,
       setMessages,
       setPendingLedger,
+      setSessionId,
     });
 
   const { confirmLedger, cancelLedger } = useLedger({
     wsRef,
-    sessionId,
+    sessionId: sessionId || 'new',
     userId,
     pendingLedger,
     setPendingLedger,
@@ -41,7 +40,7 @@ export function App() {
 
   // 事件處理
   const handleNewSession = () => {
-    setSessionId(Math.random().toString(36).slice(2));
+    setSessionId(null);
     setMessages([{ role: 'system', content: '新會話，開始聊天吧。' }]);
   };
 
@@ -61,7 +60,7 @@ export function App() {
         open={sidebarOpen}
         connected={connected}
         sessions={sessions}
-        currentSessionId={sessionId}
+        currentSessionId={sessionId || ''}
         onToggle={() => setSidebarOpen((v) => !v)}
         onSessionSelect={handleSessionSelect}
         onNewSession={handleNewSession}

@@ -1,7 +1,9 @@
 import { Client } from '@temporalio/client';
-import { UserMessage } from '../types';
 import WebSocket, { RawData } from 'ws';
+import { randomUUID } from 'crypto';
+import { UserMessage } from '../types';
 import * as db from '../utils/db';
+
 
 // 消息处理器的上下文
 export interface MessageHandlerContext {
@@ -29,11 +31,20 @@ async function ensureSessionWorkflow(client: Client, sessionId: string, startedA
     return handle;
   } catch {
     // 若尚未存在，启动一个 entity workflow 实例
-    const newHandle = await client.workflow.start('chatSessionWorkflow', {
-      args: [{ sessionId, startedAtMs }],
-      taskQueue: 'chat-ai',
-      workflowId,
-    });
+    const newHandle = await client.workflow.start(
+      'chatSessionWorkflow', // workflow 函數名稱（需與 workflows.ts 中導出的函數名稱一致）
+      {
+        // 傳遞給 workflow 的參數列表（對應 workflow 函數的參數）
+        args: [{ sessionId, startedAtMs }],
+        
+        // 指定 worker 監聽的任務隊列名稱（需與 worker.ts 中的 taskQueue 一致）
+        taskQueue: 'chat-ai',
+        
+        // workflow 實例的唯一 ID，用於標識和查詢此 workflow
+        // 格式：chat-session-${sessionId}，確保每個 session 只有一個 workflow 實例
+        workflowId,
+      }
+    );
     return newHandle;
   }
 }
@@ -43,7 +54,15 @@ async function ensureSessionWorkflow(client: Client, sessionId: string, startedA
  */
 async function handleUserMessage(data: any, context: MessageHandlerContext): Promise<void> {
   const { temporalClient, ws } = context;
-  const sessionId = String(data.sessionId ?? 'unknown');
+  let sessionId = String(data.sessionId ?? 'unknown');
+  
+  // 檢測是否需要創建新 session
+  const isNewSession = sessionId === 'new' || sessionId === '' || sessionId === 'unknown';
+  if (isNewSession) {
+    sessionId = randomUUID(); // 生成新的 UUID
+    console.log(`Created new session: ${sessionId}`);
+  }
+  
   const args: UserMessage = {
     userId: String(data.userId ?? 'anonymous'),
     sessionId: sessionId,
@@ -70,9 +89,10 @@ async function handleUserMessage(data: any, context: MessageHandlerContext): Pro
   db.insertMessage(sessionId, 'assistant', reply, Date.now());
   ws.send(JSON.stringify({ 
     type: 'assistant_message', 
-    sessionId: args.sessionId, 
+    sessionId: sessionId,
     userId: args.userId, 
-    message: reply 
+    message: reply,
+    isNewSession
   }));
 }
 

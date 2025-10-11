@@ -8,6 +8,7 @@ interface UseChatParams {
   userId: string;
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   setPendingLedger: React.Dispatch<React.SetStateAction<PendingLedger | null>>;
+  setSessionId?: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
 export function useChat({
@@ -16,6 +17,7 @@ export function useChat({
   userId,
   setMessages,
   setPendingLedger,
+  setSessionId,
 }: UseChatParams) {
   const [input, setInput] = useState('');
   const [waitingReply, setWaitingReply] = useState(false);
@@ -30,6 +32,13 @@ export function useChat({
         const data = JSON.parse(String(evt.data));
         if (data?.type === 'assistant_message') {
           setWaitingReply(false);
+          
+          // 如果是新 session，更新 sessionId
+          if (data.isNewSession && data.sessionId && setSessionId) {
+            console.log(`New session created: ${data.sessionId}`);
+            setSessionId(data.sessionId);
+          }
+          
           // 嘗試解析是否為 ledger_proposal
           try {
             const parsed = JSON.parse(String(data.message));
@@ -78,7 +87,7 @@ export function useChat({
     return () => {
       ws.removeEventListener('message', handleMessage);
     };
-  }, [wsRef, setMessages, setPendingLedger]);
+  }, [wsRef, setMessages, setPendingLedger, setSessionId]);
 
   const canSend = useMemo(
     () => input.trim().length > 0 && !waitingReply,
