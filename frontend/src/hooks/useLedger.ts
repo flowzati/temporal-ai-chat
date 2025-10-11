@@ -26,14 +26,24 @@ export function useLedger({
 }: UseLedgerParams) {
   const confirmLedger = () => {
     if (!wsRef.current || !pendingLedger) return;
+    
+    // 將確認記帳作為普通訊息發送，使用特殊前綴標識
+    const confirmMessage = `__CONFIRM_LEDGER__:${JSON.stringify(pendingLedger.proposal)}`;
     const payload = {
-      type: 'confirm_ledger',
+      type: 'user_message',
       sessionId,
       userId,
-      proposal: pendingLedger.proposal,
+      message: confirmMessage,
       requestId: generateRequestId(), // 幂等性：添加请求ID
     };
     wsRef.current.send(JSON.stringify(payload));
+    
+    // 在前端顯示用戶的確認操作
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', content: '確認記帳' },
+    ]);
+    
     setPendingLedger(null);
   };
 

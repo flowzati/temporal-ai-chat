@@ -1,5 +1,5 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
-import { Capability, SendMessageParams, SaveLedgerInput, StartSessionParams, ConfirmLedgerArgs, QueueItem, ParsedLedgerProposalResult, SaveMessageArgs, InitializeSessionArgs } from '../types';
+import { Capability, SendMessageParams, SaveLedgerInput, StartSessionParams, QueueItem, ParsedLedgerProposalResult, SaveMessageArgs, InitializeSessionArgs } from '../types';
 
 /**
  * 工作流模式說明：
@@ -44,7 +44,6 @@ const activities = proxyActivities<ChatActivities>(ACTIVITY_CONFIG);
 
 // ==================== Update 和 Signal 定義 ====================
 const sendMessageUpdate = defineUpdate<string, [SendMessageParams]>('sendMessage');
-const confirmLedgerUpdate = defineUpdate<string, [ConfirmLedgerArgs]>('confirmLedger');
 const cancelSignal = defineSignal('cancel');
 
 // ==================== 工具函數（Workflow 外部）====================
@@ -241,24 +240,6 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
     return result;
   });
 
-  // -------------------- Update Handler: 確認記帳 --------------------
-  setHandler(confirmLedgerUpdate, async (args: ConfirmLedgerArgs): Promise<string> => {
-    const cached = idempotency.getCached(args.requestId);
-    if (cached) return cached;
-
-    const result = await activities.saveLedger({
-      userId: args.userId,
-      sessionId: args.sessionId,
-      title: args.proposal.title,
-      amountCents: args.proposal.amountCents,
-      occurredAtMs: args.proposal.occurredAtMs,
-      requestId: args.requestId,
-    });
-
-    idempotency.putCached(args.requestId, result);
-    return result;
-  });
-
   // -------------------- Signal Handler: 取消 --------------------
   setHandler(cancelSignal, () => {
     currentScope?.cancel();
@@ -278,7 +259,57 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       sessionInitialized = true;
     }
 
-    // 1.儲存用戶訊息
+    // 1. 檢測是否為確認記帳訊息
+    if (item.text.startsWith('__CONFIRM_LEDGER__:')) {
+      try {
+        const proposalJson = item.text.substring('__CONFIRM_LEDGER__:'.length);
+        const proposal = JSON.parse(proposalJson) as {
+          userId: string;
+          sessionId: string;
+          title: string;
+          amountCents: number;
+          occurredAtMs: number;
+        };
+
+        // 儲存用戶確認訊息（顯示為"確認記帳"）
+        await activities.saveMessage({
+          sessionId: item.sessionId,
+          role: 'user',
+          content: '確認記帳',
+          timestamp,
+          messageId: `user-${item.requestId}`,
+        });
+
+        // 執行記帳
+        const result = await activities.saveLedger({
+          userId: proposal.userId,
+          sessionId: proposal.sessionId,
+          title: proposal.title,
+          amountCents: proposal.amountCents,
+          occurredAtMs: proposal.occurredAtMs,
+          requestId: item.requestId,
+        });
+
+        // 儲存確認結果訊息
+        await activities.saveMessage({
+          sessionId: item.sessionId,
+          role: 'assistant',
+          content: result,
+          timestamp,
+          messageId: `assistant-${item.requestId}`,
+        });
+
+        item.completion.resolve(result);
+        return;
+      } catch (err: any) {
+        const errorMsg = `確認記帳失敗：${err?.message ?? 'Unknown error'}`;
+        await saveSystemMessage(item.sessionId, errorMsg, timestamp);
+        item.completion.resolve(errorMsg);
+        return;
+      }
+    }
+
+    // 2.儲存用戶訊息（正常消息）
     await activities.saveMessage({
       sessionId: item.sessionId,
       role: 'user',
@@ -287,13 +318,13 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       messageId: `user-${item.requestId}`,
     });
 
-    // 2.判斷能力並生成回覆
+    // 3.判斷能力並生成回覆
     const capability = await activities.decideCapability(item.text);
 
-    // 3.生成回覆
+    // 4.生成回覆
     const reply = await generateReply(capability, item, timestamp);
 
-    // 4.儲存 AI 回覆
+    // 5.儲存 AI 回覆
     await activities.saveMessage({
       sessionId: item.sessionId,
       role: 'assistant',
@@ -302,7 +333,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       messageId: `assistant-${item.requestId}`,
     });
 
-    // 5. 返回回覆
+    // 6. 返回回覆
     item.completion.resolve(reply);
   }
 

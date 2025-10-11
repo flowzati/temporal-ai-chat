@@ -6,7 +6,6 @@ import { SendMessageParams } from '../types';
 // ==================== 常量定义 ====================
 const MESSAGE_TYPES = {
   USER_MESSAGE: 'user_message',
-  CONFIRM_LEDGER: 'confirm_ledger',
   CANCEL: 'cancel',
   ASSISTANT_MESSAGE: 'assistant_message',
   ERROR: 'error',
@@ -30,18 +29,6 @@ export interface UserMessageData extends BaseMessage {
   userId: string;
   sessionId?: string;
   message: string;
-  requestId?: string; // 幂等性：请求唯一标识
-}
-
-export interface ConfirmLedgerData extends BaseMessage {
-  type: typeof MESSAGE_TYPES.CONFIRM_LEDGER;
-  userId: string;
-  sessionId: string;
-  proposal: {
-    title: string;
-    amountCents: number;
-    occurredAtMs: number;
-  };
   requestId?: string; // 幂等性：请求唯一标识
 }
 
@@ -287,62 +274,6 @@ async function handleUserMessage(
 }
 
 /**
- * 处理记账确认
- */
-async function handleConfirmLedger(
-  data: ConfirmLedgerData,
-  context: MessageHandlerContext
-): Promise<void> {
-  const { sessionId, userId, proposal } = data;
-  
-  // 验证 proposal 数据
-  if (
-    !proposal ||
-    typeof proposal.title !== 'string' ||
-    typeof proposal.amountCents !== 'number' ||
-    typeof proposal.occurredAtMs !== 'number'
-  ) {
-    return context.sendError('Invalid proposal', sessionId);
-  }
-  
-  // 幂等性检查
-  const cachedResult = checkIdempotency(data.requestId);
-  if (cachedResult) {
-    return context.sendResponse({
-      type: MESSAGE_TYPES.ASSISTANT_MESSAGE,
-      sessionId,
-      userId,
-      message: cachedResult,
-    });
-  }
-  
-  try {
-    const reply = await executeWorkflowOperation(sessionId, (handle) =>
-      handle.executeUpdate('confirmLedger', { 
-        args: [{ userId, sessionId, proposal, requestId: data.requestId }],
-        // Temporal 内置幂等性：使用 requestId 作为 updateId
-        ...(data.requestId && { updateId: data.requestId }),
-      })
-    ) as string;
-    
-    // 缓存结果
-    cacheIdempotencyResult(data.requestId, reply);
-    
-    context.sendResponse({
-      type: MESSAGE_TYPES.ASSISTANT_MESSAGE,
-      sessionId,
-      userId,
-      message: reply,
-    });
-    
-    console.log(`[handleConfirmLedger] Success: ${sessionId}`);
-  } catch (error: any) {
-    console.error(`[handleConfirmLedger] Error:`, error);
-    context.sendError(`確認記帳失敗：${error?.message ?? 'Unknown error'}`, sessionId);
-  }
-}
-
-/**
  * 处理取消操作
  */
 async function handleCancel(
@@ -398,7 +329,6 @@ export class WebSocketRouter {
    */
   private registerHandlers(): void {
     this.handlers.set(MESSAGE_TYPES.USER_MESSAGE, handleUserMessage as MessageHandler);
-    this.handlers.set(MESSAGE_TYPES.CONFIRM_LEDGER, handleConfirmLedger as MessageHandler);
     this.handlers.set(MESSAGE_TYPES.CANCEL, handleCancel as MessageHandler);
   }
 
