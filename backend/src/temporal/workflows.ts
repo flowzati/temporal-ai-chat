@@ -118,31 +118,51 @@ async function generateReply(
   }
 }
 
+// -------------------- 幂等性管理器 --------------------
+function createIdempotencyManager(initialIds: string[] = []) {
+  const processedIds = new Set<string>(initialIds);
+  const resultCache = new Map<string, string>();
+  
+  return {
+    getCached(requestId?: string): string | null {
+      if (!requestId || !processedIds.has(requestId)) return null;
+      return resultCache.get(requestId) || IDEMPOTENCY_CONFIG.duplicateMessage;
+    },
+    
+    putCached(requestId: string | undefined, result: string): void {
+      if (requestId) {
+        processedIds.add(requestId);
+        resultCache.set(requestId, result);
+      }
+    },
+    
+    getStateForContinueAsNew() {
+      const allIds = Array.from(processedIds);
+      const idsToKeep = allIds.slice(-IDEMPOTENCY_CONFIG.maxCachedRequestIds);
+      
+      return {
+        ids: idsToKeep,
+        stats: {
+          total: allIds.length,
+          kept: idsToKeep.length,
+          size: JSON.stringify(idsToKeep).length
+        }
+      };
+    }
+  };
+}
+
 // ==================== 主工作流 ====================
 export async function chatSessionWorkflow(startSessionParams: StartSessionParams): Promise<void> {
   // -------------------- 狀態初始化 --------------------
   const pendingQueue: QueueItem[] = [];
-  const processedRequestIds = new Set<string>(startSessionParams.processedRequestIds || []);
-  const resultCache = new Map<string, string>();
+  const idempotency = createIdempotencyManager(startSessionParams.processedRequestIds);
   let currentScope: CancellationScope | null = null;
   let sessionInitialized = false;
-
-  // -------------------- 幂等性輔助函數 --------------------
-  function getCachedResult(requestId?: string): string | null {
-    if (!requestId || !processedRequestIds.has(requestId)) return null;
-    return resultCache.get(requestId) || IDEMPOTENCY_CONFIG.duplicateMessage;
-  }
-
-  function recordResultAndCache(requestId: string | undefined, result: string): void {
-    if (requestId) {
-      processedRequestIds.add(requestId);
-      resultCache.set(requestId, result);
-    }
-  }
-
+  
   // -------------------- Update Handler: 發送訊息 --------------------
   setHandler(sendMessageUpdate, async (params: SendMessageParams): Promise<string> => {
-    const cached = getCachedResult(params.requestId);
+    const cached = idempotency.getCached(params.requestId);
     if (cached) return cached;
     
     const completion = new Trigger<string>();
@@ -156,13 +176,13 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
     });
     
     const result = await completion;
-    recordResultAndCache(params.requestId, result);
+    idempotency.putCached(params.requestId, result);
     return result;
   });
 
   // -------------------- Update Handler: 確認記帳 --------------------
   setHandler(confirmLedgerUpdate, async (args: ConfirmLedgerArgs): Promise<string> => {
-    const cached = getCachedResult(args.requestId);
+    const cached = idempotency.getCached(args.requestId);
     if (cached) return cached;
     
     const result = await activities.saveLedger({
@@ -174,7 +194,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       requestId: args.requestId,
     });
     
-    recordResultAndCache(args.requestId, result);
+    idempotency.putCached(args.requestId, result);
     return result;
   });
 
@@ -242,20 +262,18 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
   }
 
   function performContinueAsNew() {
-    const allIds = Array.from(processedRequestIds);
-    const idsToKeep = allIds.slice(-IDEMPOTENCY_CONFIG.maxCachedRequestIds);
-    const stateSize = JSON.stringify(idsToKeep).length;
+    const state = idempotency.getStateForContinueAsNew();
     
-    console.log(`[ContinueAsNew] ${idsToKeep.length}/${allIds.length} IDs (${stateSize} bytes)`);
+    console.log(`[ContinueAsNew] ${state.stats.kept}/${state.stats.total} IDs (${state.stats.size} bytes)`);
     
-    if (stateSize > IDEMPOTENCY_CONFIG.maxStateSizeBytes) {
-      console.warn(`[ContinueAsNew] Large state: ${stateSize} bytes`);
+    if (state.stats.size > IDEMPOTENCY_CONFIG.maxStateSizeBytes) {
+      console.warn(`[ContinueAsNew] Large state: ${state.stats.size} bytes`);
     }
     
     return continueAsNew<typeof chatSessionWorkflow>({
       sessionId: startSessionParams.sessionId,
       startedAtMs: startSessionParams.startedAtMs,
-      processedRequestIds: idsToKeep,
+      processedRequestIds: state.ids,
     });
   }
 
@@ -277,7 +295,6 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       }
     }
 
-    // ContinueAsNew
     if (workflowInfo().continueAsNewSuggested) {
       performContinueAsNew();
     }
