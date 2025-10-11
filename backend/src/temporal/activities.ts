@@ -51,8 +51,6 @@ export async function queryLedgerRange(args: SendMessageParams): Promise<string>
 export async function saveLedger(proposal: SaveLedgerInput & { requestId?: string }): Promise<string> {
   try {
     // 幂等性：使用 requestId 作为 ledgerId
-    const ledgerId = proposal.requestId ? `ledger-${proposal.requestId}` : undefined;
-    
     db.insertLedgerEntry({
       userId: proposal.userId,
       sessionId: proposal.sessionId ?? null,
@@ -60,7 +58,7 @@ export async function saveLedger(proposal: SaveLedgerInput & { requestId?: strin
       amountCents: proposal.amountCents,
       occurredAtMs: proposal.occurredAtMs,
       createdAtMs: Date.now(),
-      ledgerId,
+      ledgerId: `ledger-${proposal.requestId}`
     });
     return '已存入記帳';
   } catch (err: any) {

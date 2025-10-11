@@ -108,12 +108,13 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
   });
 
   async function processMessage(item: QueueItem): Promise<void> {
+    const messageTimestamp = item.startedAtMs;
     // 1. 初始化 session（只在第一條訊息時執行）
     if (!sessionInitialized) {
       await acts.initializeSession({
         sessionId: item.sessionId,
         title: item.text, // 首條訊息作為 session 標題
-        timestamp: item.startedAtMs
+        timestamp: messageTimestamp
       });
       sessionInitialized = true;
     }
@@ -123,7 +124,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       sessionId: item.sessionId,
       role: 'user',
       content: item.text,
-      timestamp: item.startedAtMs,
+      timestamp: messageTimestamp,
       messageId: `user-${item.requestId}`,
     });
 
@@ -141,7 +142,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
           userId: item.userId,
           sessionId: item.sessionId,
           text: item.text,
-          startedAtMs: item.startedAtMs,
+          startedAtMs: messageTimestamp,
           requestId: item.requestId,
         });
         reply = JSON.stringify({
@@ -173,7 +174,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       sessionId: item.sessionId,
       role: 'assistant',
       content: reply,
-      timestamp: Date.now(),
+      timestamp: messageTimestamp,
       messageId: `assistant-${item.requestId}`,
     });
     
@@ -205,7 +206,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
               sessionId: item.sessionId,
               role: 'system',
               content: '已取消',
-              timestamp: Date.now()
+              timestamp: item.startedAtMs
             });
           } catch {}
           continue;
@@ -223,7 +224,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
             sessionId: item.sessionId,
             role: 'system',
             content: errorMsg,
-            timestamp: Date.now()
+            timestamp: item.startedAtMs
           });
         } catch (saveErr: any) {
           console.error('Failed to save error message:', saveErr);
@@ -236,19 +237,17 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
     }
 
     if (info.continueAsNewSuggested) {
-      // 🔑 清理并传递去重状态（时间窗口过滤）
+      // 🔑 清理并传递去重状态（数量限制）
+      const MAX_CACHED_REQUEST_IDS = 1000; // 最多保留 1000 个 requestId
       
-      const now = Date.now();
-      const ONE_HOUR_MS = 3600000; // 1 小时
-      
-      // 按时间窗口过滤（保留最近 1 小时）
-      const idsToKeep = Array.from(processedRequestIds).filter(id => {
-        const timestamp = parseInt(id.split('-')[0]);
-        return !isNaN(timestamp) && (now - timestamp) < ONE_HOUR_MS;
-      });
+      // 按数量限制（保留最近的 N 个）
+      const allIds = Array.from(processedRequestIds);
+      const idsToKeep = allIds.slice(-MAX_CACHED_REQUEST_IDS);
       
       // 🔑 监控：记录状态大小
       const stateSize = JSON.stringify(idsToKeep).length;
+      console.log(`[ContinueAsNew] Keeping ${idsToKeep.length}/${allIds.length} requestIds (${stateSize} bytes)`);
+      
       if (stateSize > 100000) {
         console.warn(`[ContinueAsNew] Large state detected: ${stateSize} bytes`);
       }
