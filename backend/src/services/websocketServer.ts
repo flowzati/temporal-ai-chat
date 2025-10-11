@@ -12,7 +12,7 @@ export function setupWebSocketServer(server: http.Server, temporalClient: Client
   wss.on('connection', (ws) => {
     // 为每个 WebSocket 连接创建一个路由器实例
     const router = new WebSocketRouter({
-      client: temporalClient,
+      temporalClient: temporalClient,
       ws
     });
 

@@ -5,7 +5,7 @@ import * as db from '../utils/db';
 
 // 消息处理器的上下文
 export interface MessageHandlerContext {
-  client: Client;
+  temporalClient: Client;
   ws: WebSocket;
 }
 
@@ -42,7 +42,7 @@ async function ensureSessionWorkflow(client: Client, sessionId: string, startedA
  * 处理用户消息
  */
 async function handleUserMessage(data: any, context: MessageHandlerContext): Promise<void> {
-  const { client, ws } = context;
+  const { temporalClient, ws } = context;
   const sessionId = String(data.sessionId ?? 'unknown');
   const args: UserMessage = {
     userId: String(data.userId ?? 'anonymous'),
@@ -63,7 +63,7 @@ async function handleUserMessage(data: any, context: MessageHandlerContext): Pro
   db.insertMessage(sessionId, 'user', args.userMessage, now);
 
   // 实体工作流：确保 session workflow 存在，并执行 Update
-  const sessionHandle = await ensureSessionWorkflow(client, sessionId, now);
+  const sessionHandle = await ensureSessionWorkflow(temporalClient, sessionId, now);
 
   const reply: string = await sessionHandle.executeUpdate('sendMessage', { args: [{ ...args, startedAtMs: now }] });
 
@@ -80,7 +80,7 @@ async function handleUserMessage(data: any, context: MessageHandlerContext): Pro
  * 处理记账确认
  */
 async function handleConfirmLedger(data: any, context: MessageHandlerContext): Promise<void> {
-  const { client, ws } = context;
+  const { temporalClient, ws } = context;
   const sessionId = String(data.sessionId ?? 'unknown');
   const userId = String(data.userId ?? 'anonymous');
   const proposal = data.proposal as { title: string; amountCents: number; occurredAtMs: number };
@@ -90,7 +90,7 @@ async function handleConfirmLedger(data: any, context: MessageHandlerContext): P
     return;
   }
   
-  const sessionHandle = await ensureSessionWorkflow(client, sessionId, Date.now());
+  const sessionHandle = await ensureSessionWorkflow(temporalClient, sessionId, Date.now());
   const reply: string = await sessionHandle.executeUpdate('confirmLedger', { args: [{ userId, sessionId, proposal }] });
   ws.send(JSON.stringify({ type: 'assistant_message', sessionId, userId, message: reply }));
 }
@@ -99,9 +99,9 @@ async function handleConfirmLedger(data: any, context: MessageHandlerContext): P
  * 处理取消操作
  */
 async function handleCancel(data: any, context: MessageHandlerContext): Promise<void> {
-  const { client, ws } = context;
+  const { temporalClient, ws } = context;
   const sessionId = String(data.sessionId ?? 'unknown');
-  const sessionHandle = await ensureSessionWorkflow(client, sessionId, Date.now());
+  const sessionHandle = await ensureSessionWorkflow(temporalClient, sessionId, Date.now());
   await sessionHandle.signal('cancel');
   // 工作流会自行回复取消消息，避免重复传送
 }
@@ -122,16 +122,9 @@ export class WebSocketRouter {
    * 注册默认的消息处理器
    */
   private registerDefaultHandlers(): void {
-    this.register('user_message', handleUserMessage);
-    this.register('confirm_ledger', handleConfirmLedger);
-    this.register('cancel', handleCancel);
-  }
-
-  /**
-   * 注册消息处理器
-   */
-  register(type: string, handler: MessageHandler): void {
-    this.handlers.set(type, handler);
+    this.handlers.set('user_message', handleUserMessage);
+    this.handlers.set('confirm_ledger', handleConfirmLedger);
+    this.handlers.set('cancel', handleCancel);
   }
 
   /**
