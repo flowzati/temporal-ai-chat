@@ -1,4 +1,4 @@
-import { ParsedLedgerProposalResult, Capability, SendMessageArgs, SaveLedgerInput, LedgerQueryRangeResult, LedgerEntryRow, InitializeSessionArgs, SaveMessageArgs } from '../types';
+import { ParsedLedgerProposalResult, Capability, SendMessageParams, SaveLedgerInput, LedgerQueryRangeResult, LedgerEntryRow, InitializeSessionArgs, SaveMessageArgs } from '../types';
 import * as ledger from '../utils/ledger';
 import * as db from '../utils/db';
 import * as ai from '../utils/ai';
@@ -30,7 +30,7 @@ export async function weatherReply(userMessage: string): Promise<string> {
   }
 }
 
-export async function parseLedgerProposal(args: SendMessageArgs): Promise<ParsedLedgerProposalResult> {
+export async function parseLedgerProposal(args: SendMessageParams): Promise<ParsedLedgerProposalResult> {
   try {
     return await ai.parseLedgerProposal(args.text, args.userId, args.sessionId);
   } catch (err: any) {
@@ -38,7 +38,7 @@ export async function parseLedgerProposal(args: SendMessageArgs): Promise<Parsed
   }
 }
 
-export async function queryLedgerRange(args: SendMessageArgs): Promise<string> {
+export async function queryLedgerRange(args: SendMessageParams): Promise<string> {
   try {
     const range: LedgerQueryRangeResult = await ai.queryLedgerRange(args.text);
     const entries: LedgerEntryRow[] = db.listLedgerEntriesByRange(args.userId, range.startMs, range.endMs);

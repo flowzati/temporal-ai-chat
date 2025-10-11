@@ -1,7 +1,6 @@
 import { Trigger } from '@temporalio/workflow';
-import { z } from 'zod';
 
-export interface StartSessionArgs {
+export interface StartSessionParams {
   sessionId: string;
   startedAtMs: number;
   processedRequestIds?: string[]; // 幂等性：从 ContinueAsNew 传递的已处理 requestId
@@ -11,16 +10,13 @@ export interface ChatBase {
   sessionId: string;
 }
 
-export interface UserMessage extends ChatBase {
+export interface SendMessageParams extends ChatBase {
   text: string;
-}
-
-export interface SendMessageArgs extends UserMessage {
   startedAtMs: number;
   requestId?: string; // 幂等性：请求唯一标识
 }
 
-export interface QueueItem extends SendMessageArgs {
+export interface QueueItem extends SendMessageParams {
   completion: Trigger<string>;
 }
 

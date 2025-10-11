@@ -1,7 +1,7 @@
 import { Client, WorkflowHandle } from '@temporalio/client';
 import WebSocket, { RawData } from 'ws';
 import { randomUUID } from 'crypto';
-import { UserMessage } from '../types';
+import { SendMessageParams } from '../types';
 
 // ==================== 常量定义 ====================
 const MESSAGE_TYPES = {
@@ -252,17 +252,19 @@ async function handleUserMessage(
   // 处理 session ID
   var { sessionId, isNewSession } = getOrGenSessionId(data.sessionId!);
   
-  const userMessage: UserMessage = {
-    userId: data.userId,
-    sessionId: sessionId,
-    text: data.message,
-  };
+  
   
   try {
-    const now = Date.now();
+    const userMessage: SendMessageParams = {
+      userId: data.userId,
+      sessionId: sessionId,
+      text: data.message,
+      startedAtMs: Date.now(),
+      requestId: data.requestId,
+    };
     const reply = await executeWorkflowOperation(sessionId, (handle) =>
       handle.executeUpdate('sendMessage', {
-        args: [{ ...userMessage, startedAtMs: now, requestId: data.requestId }],
+        args: [userMessage],
         // Temporal 内置幂等性：使用 requestId 作为 updateId
         ...(data.requestId && { updateId: data.requestId }),
       })

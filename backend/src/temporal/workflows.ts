@@ -1,16 +1,16 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
-import { Capability, SendMessageArgs, SaveLedgerInput, StartSessionArgs, ConfirmLedgerArgs, QueueItem, ParsedLedgerProposalResult, SaveMessageArgs, InitializeSessionArgs } from '../types';
+import { Capability, SendMessageParams, SaveLedgerInput, StartSessionParams, ConfirmLedgerArgs, QueueItem, ParsedLedgerProposalResult, SaveMessageArgs, InitializeSessionArgs } from '../types';
 
 // 說明：本工作流採用 Entity/Virtual Actor 模式（每個 sessionId 對應一個長駐實體）。
 // - Workflow 僅負責決策與協調（決定性），所有 I/O 交由 Activities 執行（避免非決定性）。
 // - 以內存佇列 + condition 等待的方式串行處理訊息，確保順序與一致性。
-export interface ChatActivities {
+interface ChatActivities {
   decideCapability: (userMessage: string) => Promise<Capability>;
   chatReply: (userMessage: string) => Promise<string>;
   weatherReply: (userMessage: string) => Promise<string>;
   saveLedger: (args: SaveLedgerInput) => Promise<string>;
-  parseLedgerProposal: (args: SendMessageArgs) => Promise<ParsedLedgerProposalResult>;
-  queryLedgerRange: (args: SendMessageArgs) => Promise<string>;
+  parseLedgerProposal: (args: SendMessageParams) => Promise<ParsedLedgerProposalResult>;
+  queryLedgerRange: (args: SendMessageParams) => Promise<string>;
   saveMessage: (params: SaveMessageArgs) => Promise<void>;
   initializeSession: (params: InitializeSessionArgs) => Promise<void>;
 }
@@ -25,36 +25,31 @@ const acts = proxyActivities<ChatActivities>({
 });
 
 // 定義 Update：單次訊息處理，回傳助理回覆（泛型順序為 <Return, [Args]>）
-export const sendMessageUpdate = defineUpdate<string, [SendMessageArgs]>('sendMessage');
+const sendMessageUpdate = defineUpdate<string, [SendMessageParams]>('sendMessage');
 // 定義 Update：確認記帳
-export const confirmLedgerUpdate = defineUpdate<string, [ConfirmLedgerArgs]>('confirmLedger');
+const confirmLedgerUpdate = defineUpdate<string, [ConfirmLedgerArgs]>('confirmLedger');
 // 定義 Signal：取消訊號
-export const cancelSignal = defineSignal('cancel');
+const cancelSignal = defineSignal('cancel');
 
 // Entity 風格的長駐工作流：每個 sessionId 對應一個工作流實體
-export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<void> {
+export async function chatSessionWorkflow(startSessionParams: StartSessionParams): Promise<void> {
   // 執行期佇列：Update 只入列，主循環負責出列處理
   const pendingQueue: QueueItem[] = [];
+  // 恢复从上一次 ContinueAsNew 传递的状态
+  // 🔑 幂等性：内存去重
+  const processedRequestIds = new Set<string>(startSessionParams.processedRequestIds || []);
+  const resultCache = new Map<string, string>();
   let currentScope: CancellationScope | null = null;
   let sessionInitialized = false; // 記錄 session 是否已初始化（避免重複 DB 查詢）
-  
-  // 🔑 幂等性：内存去重（方案 1.1）
-  // 恢复从上一次 ContinueAsNew 传递的状态
-  const processedRequestIds = new Set<string>(startArgs.processedRequestIds || []);
-  const resultCache = new Map<string, string>();
-  
-  console.log(`[Workflow] Initialized with ${processedRequestIds.size} cached requestIds`);
+
+
 
   // Update：將訊息入列並等待主循環處理結果（以 Trigger 實現 deferred）
-  setHandler(sendMessageUpdate, async (args: SendMessageArgs): Promise<string> => {
-    console.log('sendMessageUpdate', args);
-    
+  setHandler(sendMessageUpdate, async (params: SendMessageParams): Promise<string> => {
     // 🔑 幂等性检查：如果 requestId 已处理，直接返回缓存结果
-    if (args.requestId && processedRequestIds.has(args.requestId)) {
-      console.log(`[Workflow] Duplicate request detected: ${args.requestId}`);
-      const cachedResult = resultCache.get(args.requestId);
+    if (params.requestId && processedRequestIds.has(params.requestId)) {
+      const cachedResult = resultCache.get(params.requestId);
       if (cachedResult) {
-        console.log(`[Workflow] Returning cached result for: ${args.requestId}`);
         return cachedResult;
       }
       // 如果缓存结果不存在（ContinueAsNew 后），返回通用消息
@@ -63,21 +58,20 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     
     const completion = new Trigger<string>();
     pendingQueue.push({
-      userId: args.userId,
-      sessionId: args.sessionId,
-      text: args.text,
-      startedAtMs: args.startedAtMs,
-      requestId: args.requestId,
+      userId: params.userId,
+      sessionId: params.sessionId,
+      text: params.text,
+      startedAtMs: params.startedAtMs,
+      requestId: params.requestId,
       completion
     });
     
     const result = await completion;
     
     // 🔑 记录已处理的 requestId 和结果
-    if (args.requestId) {
-      processedRequestIds.add(args.requestId);
-      resultCache.set(args.requestId, result);
-      console.log(`[Workflow] Cached result for: ${args.requestId}`);
+    if (params.requestId) {
+      processedRequestIds.add(params.requestId);
+      resultCache.set(params.requestId, result);
     }
     
     return result;
@@ -87,7 +81,6 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
   setHandler(confirmLedgerUpdate, async (args: ConfirmLedgerArgs): Promise<string> => {
     // 🔑 幂等性检查
     if (args.requestId && processedRequestIds.has(args.requestId)) {
-      console.log(`[Workflow] Duplicate confirm ledger: ${args.requestId}`);
       return resultCache.get(args.requestId) || '该记账已确认';
     }
     
@@ -126,15 +119,14 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
     }
     
     // 2. 保存用戶訊息到 DB（幂等性：使用 requestId 作为 messageId）
-    const userMessageId = item.requestId ? `user-${item.requestId}` : undefined;
     await acts.saveMessage({
       sessionId: item.sessionId,
       role: 'user',
       content: item.text,
       timestamp: item.startedAtMs,
-      messageId: userMessageId,
+      messageId: `user-${item.requestId}`,
     });
-    
+
     // 3. 根據能力分發處理
     const capability = await acts.decideCapability(item.text);
     let reply: string;
@@ -145,7 +137,6 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
         break;
       }
       case 'ledger_proposal': {
-        console.log('parseLedgerProposal', item);
         const ledger = await acts.parseLedgerProposal({
           userId: item.userId,
           sessionId: item.sessionId,
@@ -258,16 +249,13 @@ export async function chatSessionWorkflow(startArgs: StartSessionArgs): Promise<
       
       // 🔑 监控：记录状态大小
       const stateSize = JSON.stringify(idsToKeep).length;
-      console.log(`[ContinueAsNew] Keeping ${idsToKeep.length} requestIds (${stateSize} bytes)`);
-      console.log(`[ContinueAsNew] Discarded ${processedRequestIds.size - idsToKeep.length} old requestIds`);
-      
       if (stateSize > 100000) {
         console.warn(`[ContinueAsNew] Large state detected: ${stateSize} bytes`);
       }
       
       return continueAsNew<typeof chatSessionWorkflow>({
-        sessionId: startArgs.sessionId,
-        startedAtMs: startArgs.startedAtMs,
+        sessionId: startSessionParams.sessionId,
+        startedAtMs: startSessionParams.startedAtMs,
         processedRequestIds: idsToKeep, // 传递清理后的 requestIds
       });
     }
