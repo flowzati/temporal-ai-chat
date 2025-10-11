@@ -57,7 +57,7 @@ export function MessageInput({
       />
       <button
         onClick={waitingReply ? onCancel : onSend}
-        disabled={waitingReply ? disabled : !canSend}
+        disabled={waitingReply ? false : !canSend}
         title={waitingReply ? '取消當前處理' : '送出訊息'}
       >
         {waitingReply ? '取消' : '送出'}
