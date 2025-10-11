@@ -89,6 +89,7 @@ export function App() {
         <ChatMessages
           messages={messages}
           pendingLedger={pendingLedger}
+          waitingReply={waitingReply}
           onConfirmLedger={confirmLedger}
           onCancelLedger={cancelLedger}
         />

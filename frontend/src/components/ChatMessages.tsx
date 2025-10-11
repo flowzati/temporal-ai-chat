@@ -2,10 +2,12 @@ import React, { useEffect, useRef } from 'react';
 import { ChatMessage as ChatMessageType, PendingLedger } from '../types';
 import { ChatMessage } from './ChatMessage';
 import { LedgerConfirmCard } from './LedgerConfirmCard';
+import { LoadingIndicator } from './LoadingIndicator';
 
 interface ChatMessagesProps {
   messages: ChatMessageType[];
   pendingLedger: PendingLedger | null;
+  waitingReply: boolean;
   onConfirmLedger: () => void;
   onCancelLedger: () => void;
 }
@@ -13,6 +15,7 @@ interface ChatMessagesProps {
 export function ChatMessages({
   messages,
   pendingLedger,
+  waitingReply,
   onConfirmLedger,
   onCancelLedger,
 }: ChatMessagesProps) {
@@ -22,7 +25,7 @@ export function ChatMessages({
     const el = messagesBoxRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, waitingReply]);
 
   return (
     <div
@@ -39,6 +42,8 @@ export function ChatMessages({
       {messages.map((m, idx) => (
         <ChatMessage key={idx} message={m} />
       ))}
+
+      {waitingReply && <LoadingIndicator />}
 
       {pendingLedger && (
         <LedgerConfirmCard
