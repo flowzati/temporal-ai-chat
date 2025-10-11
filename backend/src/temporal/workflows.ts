@@ -33,8 +33,8 @@ interface ChatActivities {
   decideCapability: (userMessage: string) => Promise<Capability>;
   chatReply: (userMessage: string) => Promise<string>;
   weatherReply: (userMessage: string) => Promise<string>;
-  saveLedger: (args: SaveLedgerInput) => Promise<string>;
   parseLedgerProposal: (args: SendMessageParams) => Promise<ParsedLedgerProposalResult>;
+  saveLedger: (args: SaveLedgerInput) => Promise<string>;
   queryLedgerRange: (args: SendMessageParams) => Promise<string>;
   saveMessage: (params: SaveMessageArgs) => Promise<void>;
   initializeSession: (params: InitializeSessionArgs) => Promise<void>;
@@ -53,8 +53,8 @@ const cancelSignal = defineSignal('cancel');
  * 判斷是否為業務錯誤
  */
 function isBusinessError(msg: string): boolean {
-  return msg.includes('Not a ledger') 
-    || msg.includes('Invalid date') 
+  return msg.includes('Not a ledger')
+    || msg.includes('Invalid date')
     || msg.includes('Unsupported range');
 }
 
@@ -62,32 +62,49 @@ function isBusinessError(msg: string): boolean {
  * 儲存系統訊息（取消/錯誤）
  */
 async function saveSystemMessage(
-  sessionId: string, 
-  content: string, 
+  sessionId: string,
+  content: string,
   timestamp: number
 ): Promise<void> {
-  try {
-    await activities.saveMessage({
-      sessionId,
-      role: 'system',
-      content,
-      timestamp
-    });
-  } catch {}
+  await activities.saveMessage({
+    sessionId,
+    role: 'system',
+    content,
+    timestamp
+  });
+}
+
+/**
+ * 錯誤處理
+ */
+async function handleError(err: any, item: QueueItem): Promise<void> {
+  // 取消錯誤
+  if (isCancellation(err)) {
+    item.completion.resolve('已取消');
+    await saveSystemMessage(item.sessionId, '已取消', item.startedAtMs);
+    return;
+  }
+
+  // 一般錯誤
+  const msg = String(err?.message ?? 'Unknown error');
+  const errorMsg = isBusinessError(msg) ? `處理失敗：${msg}` : `系統錯誤：${msg}`;
+
+  await saveSystemMessage(item.sessionId, errorMsg, item.startedAtMs);
+  item.completion.resolve(errorMsg);
 }
 
 /**
  * 根據能力生成回覆
  */
 async function generateReply(
-  capability: Capability, 
-  item: QueueItem, 
+  capability: Capability,
+  item: QueueItem,
   timestamp: number
 ): Promise<string> {
   switch (capability) {
     case 'weather':
       return await activities.weatherReply(item.text);
-    
+
     case 'ledger_proposal': {
       const ledger = await activities.parseLedgerProposal({
         userId: item.userId,
@@ -108,7 +125,7 @@ async function generateReply(
         explain: ledger.explain
       });
     }
-    
+
     case 'ledger_query':
       return await activities.queryLedgerRange(item);
 
@@ -118,35 +135,79 @@ async function generateReply(
   }
 }
 
+function performContinueAsNew(idsToKeep: string[], originalTotal: number, sessionId: string, startedAtMs: number) {
+  const kept = idsToKeep.length;
+  const size = JSON.stringify(idsToKeep).length;
+  console.log(`[ContinueAsNew] ${kept}/${originalTotal} IDs (${size} bytes)`);
+
+  if (size > IDEMPOTENCY_CONFIG.maxStateSizeBytes) {
+    console.warn(`[ContinueAsNew] Large state: ${size} bytes`);
+  }
+
+  continueAsNew<typeof chatSessionWorkflow>({
+    sessionId: sessionId,
+    startedAtMs: startedAtMs,
+    processedRequestIds: idsToKeep,
+  });
+}
+
 // -------------------- 幂等性管理器 --------------------
+
+/**
+ * 創建幂等性管理器
+ * 
+ * 用於管理已處理的請求 ID 和結果緩存，防止重複處理相同請求。
+ * 當 Workflow 重放或收到重複請求時，可直接返回緩存結果。
+ * 
+ * @param initialIds - 初始的 requestId 列表（來自 ContinueAsNew 傳遞的狀態）
+ */
 function createIdempotencyManager(initialIds: string[] = []) {
+  // 已處理的請求 ID 集合（用於快速查找）
   const processedIds = new Set<string>(initialIds);
+
+  // 結果緩存（存儲實際返回值，用於精確幂等）
   const resultCache = new Map<string, string>();
-  
+
   return {
+    /**
+     * 獲取緩存的處理結果
+     * 
+     * @param requestId - 請求唯一標識
+     * @returns 如果已處理則返回緩存結果，否則返回 null
+     */
     getCached(requestId?: string): string | null {
       if (!requestId || !processedIds.has(requestId)) return null;
       return resultCache.get(requestId) || IDEMPOTENCY_CONFIG.duplicateMessage;
     },
-    
+
+    /**
+     * 記錄請求處理結果到緩存
+     * 
+     * @param requestId - 請求唯一標識
+     * @param result - 處理結果
+     */
     putCached(requestId: string | undefined, result: string): void {
       if (requestId) {
         processedIds.add(requestId);
         resultCache.set(requestId, result);
       }
     },
-    
+
+    /**
+     * 獲取用於 ContinueAsNew 的狀態
+     * 
+     * 返回需要傳遞到新 Workflow 實例的幂等性狀態，
+     * 會自動限制數量以控制狀態大小。
+     * 
+     * @returns 包含 ID 列表和統計信息的狀態對象
+     */
     getStateForContinueAsNew() {
       const allIds = Array.from(processedIds);
       const idsToKeep = allIds.slice(-IDEMPOTENCY_CONFIG.maxCachedRequestIds);
-      
+
       return {
-        ids: idsToKeep,
-        stats: {
-          total: allIds.length,
-          kept: idsToKeep.length,
-          size: JSON.stringify(idsToKeep).length
-        }
+        idsToKeep,        // 要傳遞的 requestId 列表
+        originalTotal: allIds.length   // 當前總數（用於日誌）
       };
     }
   };
@@ -159,12 +220,12 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
   const idempotency = createIdempotencyManager(startSessionParams.processedRequestIds);
   let currentScope: CancellationScope | null = null;
   let sessionInitialized = false;
-  
+
   // -------------------- Update Handler: 發送訊息 --------------------
   setHandler(sendMessageUpdate, async (params: SendMessageParams): Promise<string> => {
     const cached = idempotency.getCached(params.requestId);
     if (cached) return cached;
-    
+
     const completion = new Trigger<string>();
     pendingQueue.push({
       userId: params.userId,
@@ -174,7 +235,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       requestId: params.requestId,
       completion
     });
-    
+
     const result = await completion;
     idempotency.putCached(params.requestId, result);
     return result;
@@ -184,7 +245,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
   setHandler(confirmLedgerUpdate, async (args: ConfirmLedgerArgs): Promise<string> => {
     const cached = idempotency.getCached(args.requestId);
     if (cached) return cached;
-    
+
     const result = await activities.saveLedger({
       userId: args.userId,
       sessionId: args.sessionId,
@@ -193,7 +254,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       occurredAtMs: args.proposal.occurredAtMs,
       requestId: args.requestId,
     });
-    
+
     idempotency.putCached(args.requestId, result);
     return result;
   });
@@ -206,7 +267,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
   // -------------------- 訊息處理 --------------------
   async function processMessage(item: QueueItem): Promise<void> {
     const timestamp = item.startedAtMs;
-    
+
     // 0.初始化 session（僅首次）
     if (!sessionInitialized) {
       await activities.initializeSession({
@@ -216,7 +277,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       });
       sessionInitialized = true;
     }
-    
+
     // 1.儲存用戶訊息
     await activities.saveMessage({
       sessionId: item.sessionId,
@@ -228,10 +289,10 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
 
     // 2.判斷能力並生成回覆
     const capability = await activities.decideCapability(item.text);
-    
+
     // 3.生成回覆
     const reply = await generateReply(capability, item, timestamp);
-    
+
     // 4.儲存 AI 回覆
     await activities.saveMessage({
       sessionId: item.sessionId,
@@ -240,48 +301,16 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       timestamp,
       messageId: `assistant-${item.requestId}`,
     });
-    
+
     // 5. 返回回覆
     item.completion.resolve(reply);
-  }
-
-  async function handleError(err: any, item: QueueItem): Promise<void> {
-    // 取消錯誤
-    if (isCancellation(err)) {
-      item.completion.resolve('已取消');
-      await saveSystemMessage(item.sessionId, '已取消', item.startedAtMs);
-      return;
-    }
-    
-    // 一般錯誤
-    const msg = String(err?.message ?? 'Unknown error');
-    const errorMsg = isBusinessError(msg) ? `處理失敗：${msg}` : `系統錯誤：${msg}`;
-    
-    await saveSystemMessage(item.sessionId, errorMsg, item.startedAtMs);
-    item.completion.resolve(errorMsg);
-  }
-
-  function performContinueAsNew() {
-    const state = idempotency.getStateForContinueAsNew();
-    
-    console.log(`[ContinueAsNew] ${state.stats.kept}/${state.stats.total} IDs (${state.stats.size} bytes)`);
-    
-    if (state.stats.size > IDEMPOTENCY_CONFIG.maxStateSizeBytes) {
-      console.warn(`[ContinueAsNew] Large state: ${state.stats.size} bytes`);
-    }
-    
-    return continueAsNew<typeof chatSessionWorkflow>({
-      sessionId: startSessionParams.sessionId,
-      startedAtMs: startSessionParams.startedAtMs,
-      processedRequestIds: state.ids,
-    });
   }
 
   // -------------------- 主事件循環 --------------------
   while (true) {
     // 等待佇列有內容或需要 ContinueAsNew
     await condition(() => pendingQueue.length > 0 || workflowInfo().continueAsNewSuggested);
-    
+
     // 處理佇列中的訊息
     while (pendingQueue.length > 0) {
       const item = pendingQueue.shift()!;
@@ -296,7 +325,8 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
     }
 
     if (workflowInfo().continueAsNewSuggested) {
-      performContinueAsNew();
+      const { idsToKeep, originalTotal } = idempotency.getStateForContinueAsNew();
+      performContinueAsNew(idsToKeep, originalTotal, startSessionParams.sessionId, startSessionParams.startedAtMs);
     }
   }
 }

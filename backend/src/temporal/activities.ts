@@ -13,42 +13,42 @@ export async function decideCapability(text: string): Promise<Capability> {
 }
 
 // 使用 @openai/agents 產生回覆（在 worker 執行）
-export async function chatReply(userMessage: string): Promise<string> {
+export async function chatReply(text: string): Promise<string> {
   try {
-    return await ai.chatReply(userMessage);
+    return await ai.chatReply(text);
   } catch (err: any) {
     throw new Error(`chatReply failed: ${err?.message ?? 'unknown error'}`);
   }
 }
 
 // 使用工具的 Agent（加入天氣查詢）
-export async function weatherReply(userMessage: string): Promise<string> {
+export async function weatherReply(text: string): Promise<string> {
   try {
-    return await ai.weatherReply(userMessage);
+    return await ai.weatherReply(text);
   } catch (err: any) {
     throw new Error(`weatherReply failed: ${err?.message ?? 'unknown error'}`);
   }
 }
 
-export async function parseLedgerProposal(args: SendMessageParams): Promise<ParsedLedgerProposalResult> {
+export async function parseLedgerProposal(params: SendMessageParams): Promise<ParsedLedgerProposalResult> {
   try {
-    return await ai.parseLedgerProposal(args.text, args.userId, args.sessionId);
+    return await ai.parseLedgerProposal(params.text, params.userId, params.sessionId);
   } catch (err: any) {
     throw new Error(`parseLedgerProposal failed: ${err?.message ?? 'unknown error'}`);
   }
 }
 
-export async function queryLedgerRange(args: SendMessageParams): Promise<string> {
+export async function queryLedgerRange(params: SendMessageParams): Promise<string> {
   try {
-    const range: LedgerQueryRangeResult = await ai.queryLedgerRange(args.text);
-    const entries: LedgerEntryRow[] = db.listLedgerEntriesByRange(args.userId, range.startMs, range.endMs);
+    const range: LedgerQueryRangeResult = await ai.queryLedgerRange(params.text);
+    const entries: LedgerEntryRow[] = db.listLedgerEntriesByRange(params.userId, range.startMs, range.endMs);
     return ledger.formatLedgerSummary(entries, new Date(range.startMs), new Date(range.endMs));
   } catch (err: any) {
     throw new Error(`queryLedgerRange failed: ${err?.message ?? 'unknown error'}`);
   }
 }
 
-export async function saveLedger(proposal: SaveLedgerInput & { requestId?: string }): Promise<string> {
+export async function saveLedger(proposal: SaveLedgerInput): Promise<string> {
   try {
     // 幂等性：使用 requestId 作为 ledgerId
     db.insertLedgerEntry({

@@ -252,8 +252,6 @@ async function handleUserMessage(
   // 处理 session ID
   var { sessionId, isNewSession } = getOrGenSessionId(data.sessionId!);
   
-  
-  
   try {
     const userMessage: SendMessageParams = {
       userId: data.userId,
@@ -295,11 +293,6 @@ async function handleConfirmLedger(
   data: ConfirmLedgerData,
   context: MessageHandlerContext
 ): Promise<void> {
-  console.log('[handleConfirmLedger]', { 
-    sessionId: data.sessionId,
-    requestId: data.requestId 
-  });
-  
   const { sessionId, userId, proposal } = data;
   
   // 验证 proposal 数据
