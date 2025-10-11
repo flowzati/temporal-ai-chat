@@ -4,6 +4,7 @@ import { z } from 'zod';
 export interface StartSessionArgs {
   sessionId: string;
   startedAtMs: number;
+  processedRequestIds?: string[]; // 幂等性：从 ContinueAsNew 传递的已处理 requestId
 }
 export interface ChatBase {
   userId: string;
@@ -16,6 +17,7 @@ export interface UserMessage extends ChatBase {
 
 export interface SendMessageArgs extends UserMessage {
   startedAtMs: number;
+  requestId?: string; // 幂等性：请求唯一标识
 }
 
 export interface QueueItem extends SendMessageArgs {
@@ -24,12 +26,14 @@ export interface QueueItem extends SendMessageArgs {
 
 export interface ConfirmLedgerArgs extends ChatBase {
   proposal: { title: string; amountCents: number; occurredAtMs: number };
+  requestId?: string; // 幂等性：请求唯一标识
 }
 
 export interface SaveLedgerInput extends ChatBase {
   title: string;
   amountCents: number;
   occurredAtMs: number;
+  requestId?: string; // 幂等性：请求唯一标识
 }
 
 export interface ParsedLedgerProposalResult extends ChatBase {
@@ -67,10 +71,18 @@ export interface SaveMessageArgs {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
+  messageId?: string; // 幂等性：消息唯一标识
 }
 
 export interface InitializeSessionArgs {
   sessionId: string;
   title: string | null;
+  timestamp: number;
+}
+
+// 幂等性缓存条目
+export interface IdempotencyRecord {
+  requestId: string;
+  result: string;
   timestamp: number;
 }

@@ -48,8 +48,11 @@ export async function queryLedgerRange(args: SendMessageArgs): Promise<string> {
   }
 }
 
-export async function saveLedger(proposal: SaveLedgerInput): Promise<string> {
+export async function saveLedger(proposal: SaveLedgerInput & { requestId?: string }): Promise<string> {
   try {
+    // 幂等性：使用 requestId 作为 ledgerId
+    const ledgerId = proposal.requestId ? `ledger-${proposal.requestId}` : undefined;
+    
     db.insertLedgerEntry({
       userId: proposal.userId,
       sessionId: proposal.sessionId ?? null,
@@ -57,6 +60,7 @@ export async function saveLedger(proposal: SaveLedgerInput): Promise<string> {
       amountCents: proposal.amountCents,
       occurredAtMs: proposal.occurredAtMs,
       createdAtMs: Date.now(),
+      ledgerId,
     });
     return '已存入記帳';
   } catch (err: any) {
@@ -65,11 +69,17 @@ export async function saveLedger(proposal: SaveLedgerInput): Promise<string> {
 }
 
 /**
- * 保存訊息到 DB
+ * 保存訊息到 DB（支持幂等性）
  */
 export async function saveMessage(params: SaveMessageArgs): Promise<void> {
   try {
-    db.insertMessage(params.sessionId, params.role, params.content, params.timestamp);
+    db.insertMessage(
+      params.sessionId, 
+      params.role, 
+      params.content, 
+      params.timestamp,
+      params.messageId // 幂等性ID
+    );
   } catch (err: any) {
     throw new Error(`saveMessage failed: ${err?.message ?? 'unknown error'}`);
   }

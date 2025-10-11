@@ -3,12 +3,14 @@ export interface UserMessagePayload {
   sessionId: string;
   userId: string;
   message: string;
+  requestId?: string; // 幂等性：请求唯一标识
 }
 
 export interface CancelPayload {
   type: 'cancel';
   sessionId: string;
   userId: string;
+  requestId?: string; // 幂等性：请求唯一标识
 }
 
 export interface ConfirmLedgerPayload {
@@ -20,6 +22,7 @@ export interface ConfirmLedgerPayload {
     amountCents: number;
     occurredAtMs: number;
   };
+  requestId?: string; // 幂等性：请求唯一标识
 }
 
 export type WebSocketPayload = UserMessagePayload | CancelPayload | ConfirmLedgerPayload;

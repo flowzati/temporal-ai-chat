@@ -30,6 +30,7 @@ export interface UserMessageData extends BaseMessage {
   userId: string;
   sessionId?: string;
   message: string;
+  requestId?: string; // 幂等性：请求唯一标识
 }
 
 export interface ConfirmLedgerData extends BaseMessage {
@@ -41,11 +42,13 @@ export interface ConfirmLedgerData extends BaseMessage {
     amountCents: number;
     occurredAtMs: number;
   };
+  requestId?: string; // 幂等性：请求唯一标识
 }
 
 export interface CancelData extends BaseMessage {
   type: typeof MESSAGE_TYPES.CANCEL;
   sessionId: string;
+  requestId?: string; // 幂等性：请求唯一标识
 }
 
 // 响应类型
@@ -80,11 +83,25 @@ export type MessageHandler<T extends BaseMessage = BaseMessage> = (
 let globalTemporalClient: Client | null = null;
 const globalWorkflowCache = new Map<string, WorkflowHandle>();
 
+// 幂等性缓存：requestId -> { result, timestamp }
+const idempotencyCache = new Map<string, { result: string; timestamp: number }>();
+const IDEMPOTENCY_CACHE_TTL = 5 * 60 * 1000; // 5分钟过期
+
 /**
  * 初始化全局 Temporal Client（在服务器启动时调用一次）
  */
 export function initializeRouter(temporalClient: Client): void {
   globalTemporalClient = temporalClient;
+  
+  // 定期清理过期的幂等性缓存
+  setInterval(() => {
+    const now = Date.now();
+    for (const [requestId, record] of idempotencyCache.entries()) {
+      if (now - record.timestamp > IDEMPOTENCY_CACHE_TTL) {
+        idempotencyCache.delete(requestId);
+      }
+    }
+  }, 60 * 1000); // 每分钟清理一次
 }
 
 // ==================== 工具函数 ====================
@@ -103,6 +120,34 @@ function isWorkflowNotFoundError(error: any): boolean {
     error.message?.includes('not found') ||
     error.message?.includes('workflow execution already completed')
   );
+}
+
+/**
+ * 检查请求是否已处理（幂等性）
+ */
+function checkIdempotency(requestId?: string): string | null {
+  if (!requestId) return null;
+  
+  const cached = idempotencyCache.get(requestId);
+  if (cached) {
+    console.log(`[Idempotency] Cache hit for requestId: ${requestId}`);
+    return cached.result;
+  }
+  
+  return null;
+}
+
+/**
+ * 缓存请求结果（幂等性）
+ */
+function cacheIdempotencyResult(requestId: string | undefined, result: string): void {
+  if (!requestId) return;
+  
+  idempotencyCache.set(requestId, {
+    result,
+    timestamp: Date.now(),
+  });
+  console.log(`[Idempotency] Cached result for requestId: ${requestId}`);
 }
 
 /**
@@ -180,11 +225,28 @@ async function handleUserMessage(
   data: UserMessageData,
   context: MessageHandlerContext
 ): Promise<void> {
-  console.log('[handleUserMessage]', { userId: data.userId, sessionId: data.sessionId });
+  console.log('[handleUserMessage]', { 
+    userId: data.userId, 
+    sessionId: data.sessionId,
+    requestId: data.requestId 
+  });
   
   // 验证数据
   if (!data.userId || !data.message) {
     return context.sendError('Invalid message data');
+  }
+  
+  // 幂等性检查
+  const cachedResult = checkIdempotency(data.requestId);
+  if (cachedResult) {
+    const { sessionId, isNewSession } = getOrGenSessionId(data.sessionId!);
+    return context.sendResponse({
+      type: MESSAGE_TYPES.ASSISTANT_MESSAGE,
+      sessionId,
+      userId: data.userId,
+      message: cachedResult,
+      isNewSession,
+    });
   }
   
   // 处理 session ID
@@ -200,9 +262,14 @@ async function handleUserMessage(
     const now = Date.now();
     const reply = await executeWorkflowOperation(sessionId, (handle) =>
       handle.executeUpdate('sendMessage', {
-        args: [{ ...userMessage, startedAtMs: now }],
+        args: [{ ...userMessage, startedAtMs: now, requestId: data.requestId }],
+        // Temporal 内置幂等性：使用 requestId 作为 updateId
+        ...(data.requestId && { updateId: data.requestId }),
       })
     ) as string;
+    
+    // 缓存结果
+    cacheIdempotencyResult(data.requestId, reply);
     
     context.sendResponse({
       type: MESSAGE_TYPES.ASSISTANT_MESSAGE,
@@ -226,7 +293,10 @@ async function handleConfirmLedger(
   data: ConfirmLedgerData,
   context: MessageHandlerContext
 ): Promise<void> {
-  console.log('[handleConfirmLedger]', { sessionId: data.sessionId });
+  console.log('[handleConfirmLedger]', { 
+    sessionId: data.sessionId,
+    requestId: data.requestId 
+  });
   
   const { sessionId, userId, proposal } = data;
   
@@ -240,10 +310,28 @@ async function handleConfirmLedger(
     return context.sendError('Invalid proposal', sessionId);
   }
   
+  // 幂等性检查
+  const cachedResult = checkIdempotency(data.requestId);
+  if (cachedResult) {
+    return context.sendResponse({
+      type: MESSAGE_TYPES.ASSISTANT_MESSAGE,
+      sessionId,
+      userId,
+      message: cachedResult,
+    });
+  }
+  
   try {
     const reply = await executeWorkflowOperation(sessionId, (handle) =>
-      handle.executeUpdate('confirmLedger', { args: [{ userId, sessionId, proposal }] })
+      handle.executeUpdate('confirmLedger', { 
+        args: [{ userId, sessionId, proposal, requestId: data.requestId }],
+        // Temporal 内置幂等性：使用 requestId 作为 updateId
+        ...(data.requestId && { updateId: data.requestId }),
+      })
     ) as string;
+    
+    // 缓存结果
+    cacheIdempotencyResult(data.requestId, reply);
     
     context.sendResponse({
       type: MESSAGE_TYPES.ASSISTANT_MESSAGE,
@@ -266,12 +354,26 @@ async function handleCancel(
   data: CancelData,
   context: MessageHandlerContext
 ): Promise<void> {
-  console.log('[handleCancel]', { sessionId: data.sessionId });
+  console.log('[handleCancel]', { 
+    sessionId: data.sessionId,
+    requestId: data.requestId 
+  });
   
   const { sessionId } = data;
   
+  // 幂等性检查（对于 cancel，如果已处理则直接返回）
+  const cachedResult = checkIdempotency(data.requestId);
+  if (cachedResult) {
+    console.log(`[handleCancel] Already processed: ${sessionId}`);
+    return;
+  }
+  
   try {
     await executeWorkflowOperation(sessionId, (handle) => handle.signal('cancel'));
+    
+    // 缓存结果（标记为已处理）
+    cacheIdempotencyResult(data.requestId, 'cancelled');
+    
     // 工作流会自行回复取消消息，避免重复传送
     console.log(`[handleCancel] Success: ${sessionId}`);
   } catch (error: any) {

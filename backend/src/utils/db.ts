@@ -20,6 +20,7 @@ export interface MessageRow {
   role: 'user' | 'assistant' | 'system';
   content: string;
   created_at_ms: number;
+  message_id?: string | null; // 幂等性：消息唯一标识
 }
 
 let dbInstance: Db | null = null;
@@ -41,8 +42,8 @@ export function getDb(): Db {
 function migrate(db: Db) {
   // Schema：
   // - sessions：會話清單（以 session_id 為主鍵）
-  // - messages：聊天訊息（依 session 排序）
-  // - ledger_entries：記帳明細（user 維度聚合，時間範圍查詢）
+  // - messages：聊天訊息（依 session 排序，支持幂等性）
+  // - ledger_entries：記帳明細（user 維度聚合，時間範圍查詢，支持幂等性）
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id TEXT PRIMARY KEY,
@@ -56,9 +57,12 @@ function migrate(db: Db) {
       role TEXT NOT NULL CHECK (role IN ('user','assistant','system')),
       content TEXT NOT NULL,
       created_at_ms INTEGER NOT NULL,
+      message_id TEXT, 
       FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at_ms);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id) WHERE message_id IS NOT NULL;
+    
     CREATE TABLE IF NOT EXISTS ledger_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id TEXT NOT NULL,
@@ -66,9 +70,11 @@ function migrate(db: Db) {
       title TEXT NOT NULL,
       amount_cents INTEGER NOT NULL,
       occurred_at_ms INTEGER NOT NULL,
-      created_at_ms INTEGER NOT NULL
+      created_at_ms INTEGER NOT NULL,
+      ledger_id TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_ledger_user_occurred ON ledger_entries(user_id, occurred_at_ms);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_ledger_id ON ledger_entries(ledger_id) WHERE ledger_id IS NOT NULL;
   `);
 }
 
@@ -83,10 +89,26 @@ export function upsertSession(sessionId: string, title: string | null, nowMs: nu
   }
 }
 
-export function insertMessage(sessionId: string, role: 'user' | 'assistant' | 'system', content: string, createdAtMs: number): void {
+export function insertMessage(
+  sessionId: string, 
+  role: 'user' | 'assistant' | 'system', 
+  content: string, 
+  createdAtMs: number,
+  messageId?: string | null
+): void {
   const db = getDb();
-  db.prepare('INSERT INTO messages (session_id, role, content, created_at_ms) VALUES (?, ?, ?, ?)')
-    .run(sessionId, role, content, createdAtMs);
+  
+  // 幂等性检查：如果 messageId 存在且已有记录，则跳过插入
+  if (messageId) {
+    const existing = db.prepare('SELECT id FROM messages WHERE message_id = ?').get(messageId);
+    if (existing) {
+      console.log(`[insertMessage] Message already exists: ${messageId}`);
+      return;
+    }
+  }
+  
+  db.prepare('INSERT INTO messages (session_id, role, content, created_at_ms, message_id) VALUES (?, ?, ?, ?, ?)')
+    .run(sessionId, role, content, createdAtMs, messageId ?? null);
   db.prepare('UPDATE sessions SET updated_at_ms = ? WHERE session_id = ?').run(createdAtMs, sessionId);
 }
 
@@ -116,11 +138,30 @@ export function insertLedgerEntry(params: {
   amountCents: number;
   occurredAtMs: number;
   createdAtMs: number;
+  ledgerId?: string | null; // 幂等性：记账唯一标识
 }): void {
   const db = getDb();
+  
+  // 幂等性检查：如果 ledgerId 存在且已有记录，则跳过插入
+  if (params.ledgerId) {
+    const existing = db.prepare('SELECT id FROM ledger_entries WHERE ledger_id = ?').get(params.ledgerId);
+    if (existing) {
+      console.log(`[insertLedgerEntry] Ledger entry already exists: ${params.ledgerId}`);
+      return;
+    }
+  }
+  
   db.prepare(
-    'INSERT INTO ledger_entries (user_id, session_id, title, amount_cents, occurred_at_ms, created_at_ms) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(params.userId, params.sessionId ?? null, params.title, params.amountCents, params.occurredAtMs, params.createdAtMs);
+    'INSERT INTO ledger_entries (user_id, session_id, title, amount_cents, occurred_at_ms, created_at_ms, ledger_id) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    params.userId, 
+    params.sessionId ?? null, 
+    params.title, 
+    params.amountCents, 
+    params.occurredAtMs, 
+    params.createdAtMs,
+    params.ledgerId ?? null
+  );
 }
 
 // Note: retaining listLedgerEntriesByRange for potential future detailed listings

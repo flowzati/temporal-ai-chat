@@ -2,6 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChatMessage, PendingLedger } from '../types';
 import { sendWebSocketMessage } from '../utils/websocket';
 
+/**
+ * 生成请求唯一标识（用于幂等性）
+ */
+function generateRequestId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+}
+
 interface UseChatParams {
   wsRef: React.RefObject<WebSocket | null>;
   sessionId: string;
@@ -101,6 +108,7 @@ export function useChat({
       sessionId,
       userId,
       message: input.trim(),
+      requestId: generateRequestId(), // 幂等性：添加请求ID
     });
     setMessages((prev) => [
       ...prev,
@@ -116,6 +124,7 @@ export function useChat({
       type: 'cancel',
       sessionId,
       userId,
+      requestId: generateRequestId(), // 幂等性：添加请求ID
     });
   };
 

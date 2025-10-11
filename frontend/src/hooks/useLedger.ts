@@ -1,5 +1,12 @@
 import { PendingLedger } from '../types';
 
+/**
+ * 生成请求唯一标识（用于幂等性）
+ */
+function generateRequestId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+}
+
 interface UseLedgerParams {
   wsRef: React.RefObject<WebSocket | null>;
   sessionId: string;
@@ -24,6 +31,7 @@ export function useLedger({
       sessionId,
       userId,
       proposal: pendingLedger.proposal,
+      requestId: generateRequestId(), // 幂等性：添加请求ID
     };
     wsRef.current.send(JSON.stringify(payload));
     setPendingLedger(null);
