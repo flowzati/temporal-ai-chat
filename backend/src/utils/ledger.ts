@@ -94,18 +94,39 @@ export function formatLedgerSummary(entries: LedgerEntryRow[], start: Date, end:
 }
 
 export function buildLedgerProposalFields(params: {
-  parsed: { kind: 'add' | 'sub'; item: string; amount: number; occurredAt: string };
+  parsed: { kind: 'add' | 'sub'; item: string; amount: number; occurredAtMs: number };
   userId: string;
   sessionId: string;
   now: Date;
 }): { userId: string; sessionId: string; title: string; amountCents: number; occurredAtMs: number; explain: string } {
   const { parsed, userId, sessionId, now } = params;
+  
+  // 1. 計算金額（加上正負號）
   const sign = parsed.kind === 'add' ? 1 : -1;
   const amountCents = Math.round(Number(parsed.amount) * 100) * sign;
-  const occurredAtMsRaw = Number(new Date(parsed.occurredAt).getTime());
-  const occurredAtMs = Number.isFinite(occurredAtMsRaw) ? occurredAtMsRaw : now.getTime();
-
+  
+  // 2. 驗證時間戳（如果 AI 返回的無效，就用當前時間）
+  let occurredAtMs: number;
+  if (Number.isFinite(parsed.occurredAtMs) && parsed.occurredAtMs > 0) {
+    // 檢查時間戳合理性（不能是未來太遠，也不能是過去太遠）
+    const maxFutureMs = now.getTime() + 24 * 60 * 60 * 1000; // 最多未來1天
+    const minPastMs = now.getTime() - 365 * 24 * 60 * 60 * 1000; // 最多過去1年
+    
+    if (parsed.occurredAtMs < minPastMs || parsed.occurredAtMs > maxFutureMs) {
+      console.warn(`[buildLedgerProposalFields] Suspicious timestamp: ${parsed.occurredAtMs}, using current time instead`);
+      occurredAtMs = now.getTime();
+    } else {
+      occurredAtMs = parsed.occurredAtMs;
+    }
+  } else {
+    console.warn(`[buildLedgerProposalFields] Invalid timestamp: ${parsed.occurredAtMs}, using current time instead`);
+    occurredAtMs = now.getTime();
+  }
+  
+  // 3. 格式化標題
   const title = String(parsed.item ?? '項目');
+  
+  // 4. 生成說明文字
   const explain = `${title} ${amountCents >= 0 ? '+' : ''}${(amountCents / 100).toFixed(2)}，時間 ${new Date(occurredAtMs).toLocaleString()}`;
 
   return { userId, sessionId, title, amountCents, occurredAtMs, explain };

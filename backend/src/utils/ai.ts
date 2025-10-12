@@ -70,17 +70,45 @@ export async function weatherReply(userMessage: string): Promise<string> {
 
 export async function parseLedgerProposal(userMessage: string, userId: string, sessionId: string): Promise<ParsedLedgerProposalResult> {
   const now = new Date();
+  const nowMs = now.getTime();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
+  
   const agent = new Agent({
     name: 'Ledger Parser',
     instructions:
-      '你負責從中文或英文記帳指令中抽取結構化資料，或判斷是否是查詢指令。' +
-      '\n若是新增/扣除記帳：請自動判斷是【收入】或【支出】並輸出 { kind: "add"|"sub", item: string, amount: number, currency: "TWD", occurredAt: ISO8601 }。' +
-      '\n判斷規則：\n- 餐飲/交通/購物/娛樂/房租/水電等一般消費 → 視為支出 (sub)。\n- 薪資/退款/轉入/收款/報銷/利息等 → 視為收入 (add)。\n- 如果文字金額有負號，優先視為支出；有「收入/入帳/進帳」語意優先視為收入；同時出現時以語意為準。' +
-      '\n金額可含貨幣符號（如 $、NT$），請解析為數值；單位一律視為 TWD。' +
-      '\n若是查詢：輸出 { kind: "query", range: "today"|"yesterday"|"date"|"month"|"week", date?: YYYY-MM-DD }。' +
-      `\n今天日期為 ${now.toISOString().slice(0, 10)}，時間請盡量解析成 ISO 日期時間。` +
-      '\n只輸出 JSON，勿加說明。',
+      '你負責從中文或英文記帳指令中抽取結構化資料。' +
+      '\n輸出格式：{ kind: "add"|"sub", item: string, amount: number, currency: "TWD", occurredAtMs: number }' +
+      '\n\n【重要】時間解析規則（occurredAtMs 是 Unix timestamp 毫秒數）：' +
+      `\n1. 沒有提到時間 → 使用當前時間：${nowMs}` +
+      `\n   範例：「買了午餐100元」 → occurredAtMs: ${nowMs}` +
+      `\n\n2. 提到「今天」/「今日」但沒說幾點 → 使用今天 00:00:00：${todayStart}` +
+      `\n   範例：「今天買了午餐」 → occurredAtMs: ${todayStart}` +
+      `\n\n3. 提到「今天」+具體時間 → 計算該時刻的 timestamp` +
+      `\n   範例：「今天中午12點買了午餐」 → occurredAtMs: ${todayStart + 12 * 60 * 60 * 1000}` +
+      `\n   範例：「今天下午3點半」 → occurredAtMs: ${todayStart + 15.5 * 60 * 60 * 1000}` +
+      `\n\n4. 提到「昨天」/「昨日」但沒說幾點 → 使用昨天 00:00:00：${yesterdayStart}` +
+      `\n   範例：「昨天買了晚餐」 → occurredAtMs: ${yesterdayStart}` +
+      `\n\n5. 提到「昨天」+具體時間 → 計算該時刻的 timestamp` +
+      `\n   範例：「昨天晚上8點」 → occurredAtMs: ${yesterdayStart + 20 * 60 * 60 * 1000}` +
+      `\n\n6. 提到具體日期但沒說幾點 → 使用該日期 00:00:00` +
+      `\n   範例：「1月15日買了東西」 → occurredAtMs: ${new Date(now.getFullYear(), 0, 15).getTime()}` +
+      `\n\n7. 提到具體日期+時間 → 計算該時刻的 timestamp` +
+      `\n   範例：「1月15日下午2點」 → occurredAtMs: ${new Date(now.getFullYear(), 0, 15, 14, 0).getTime()}` +
+      '\n\n判斷收支規則：' +
+      '\n- 餐飲/交通/購物/娛樂/房租/水電等消費 → 支出 (sub)' +
+      '\n- 薪資/退款/轉入/收款/報銷/利息等 → 收入 (add)' +
+      '\n- 金額可含貨幣符號（$、NT$），解析為數值，單位為 TWD' +
+      '\n\n參考資訊：' +
+      `\n- 當前完整時間：${now.toISOString()} (${nowMs}ms)` +
+      `\n- 今天日期：${now.toISOString().slice(0, 10)}` +
+      `\n- 今年：${now.getFullYear()}年` +
+      '\n\n注意：' +
+      '\n1. occurredAtMs 必須是數字（Unix timestamp 毫秒）' +
+      '\n2. 只輸出 JSON，勿加說明' +
+      '\n3. 時間計算要準確，考慮年月日時分秒',
   });
+  
   const raw = String((await run(agent, userMessage)).finalOutput || '').trim();
   const parsed = JSON.parse(raw);
   if (parsed?.kind === 'add' || parsed?.kind === 'sub') {
