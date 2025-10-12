@@ -134,6 +134,55 @@ async function generateReply(
   }
 }
 
+/**
+ * 處理確認記帳訊息
+ * 
+ * @param item - 佇列項目（包含確認記帳的特殊格式訊息）
+ * @param timestamp - 訊息時間戳
+ * @returns 記帳確認結果
+ */
+async function processConfirmLedger(item: QueueItem, timestamp: number): Promise<string> {
+  // 解析 proposal 數據
+  const proposalJson = item.text.substring('__CONFIRM_LEDGER__:'.length);
+  const proposal = JSON.parse(proposalJson) as {
+    userId: string;
+    sessionId: string;
+    title: string;
+    amountCents: number;
+    occurredAtMs: number;
+  };
+
+  // 儲存用戶確認訊息（顯示為"確認記帳"）
+  await activities.saveMessage({
+    sessionId: item.sessionId,
+    role: 'user',
+    content: '確認記帳',
+    timestamp,
+    messageId: `user-${item.requestId}`,
+  });
+
+  // 執行記帳
+  const result = await activities.saveLedger({
+    userId: proposal.userId,
+    sessionId: proposal.sessionId,
+    title: proposal.title,
+    amountCents: proposal.amountCents,
+    occurredAtMs: proposal.occurredAtMs,
+    requestId: item.requestId,
+  });
+
+  // 儲存確認結果訊息
+  await activities.saveMessage({
+    sessionId: item.sessionId,
+    role: 'assistant',
+    content: result,
+    timestamp,
+    messageId: `assistant-${item.requestId}`,
+  });
+
+  return result;
+}
+
 function performContinueAsNew(idsToKeep: string[], originalTotal: number, sessionId: string, startedAtMs: number) {
   const kept = idsToKeep.length;
   const size = JSON.stringify(idsToKeep).length;
@@ -262,43 +311,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
     // 1. 檢測是否為確認記帳訊息
     if (item.text.startsWith('__CONFIRM_LEDGER__:')) {
       try {
-        const proposalJson = item.text.substring('__CONFIRM_LEDGER__:'.length);
-        const proposal = JSON.parse(proposalJson) as {
-          userId: string;
-          sessionId: string;
-          title: string;
-          amountCents: number;
-          occurredAtMs: number;
-        };
-
-        // 儲存用戶確認訊息（顯示為"確認記帳"）
-        await activities.saveMessage({
-          sessionId: item.sessionId,
-          role: 'user',
-          content: '確認記帳',
-          timestamp,
-          messageId: `user-${item.requestId}`,
-        });
-
-        // 執行記帳
-        const result = await activities.saveLedger({
-          userId: proposal.userId,
-          sessionId: proposal.sessionId,
-          title: proposal.title,
-          amountCents: proposal.amountCents,
-          occurredAtMs: proposal.occurredAtMs,
-          requestId: item.requestId,
-        });
-
-        // 儲存確認結果訊息
-        await activities.saveMessage({
-          sessionId: item.sessionId,
-          role: 'assistant',
-          content: result,
-          timestamp,
-          messageId: `assistant-${item.requestId}`,
-        });
-
+        const result = await processConfirmLedger(item, timestamp);
         item.completion.resolve(result);
         return;
       } catch (err: any) {
