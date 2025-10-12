@@ -38,13 +38,29 @@ export async function parseLedgerProposal(params: SendMessageParams): Promise<Pa
   }
 }
 
-export async function queryLedgerRange(params: SendMessageParams): Promise<string> {
+/**
+ * 解析記帳查詢範圍（AI 調用）
+ */
+export async function parseLedgerQuery(text: string): Promise<LedgerQueryRangeResult> {
   try {
-    const range: LedgerQueryRangeResult = await ai.queryLedgerRange(params.text);
-    const entries: LedgerEntryRow[] = db.listLedgerEntriesByRange(params.userId, range.startMs, range.endMs);
-    return ledger.formatLedgerSummary(entries, new Date(range.startMs), new Date(range.endMs));
+    return await ai.queryLedgerRange(text);
   } catch (err: any) {
-    throw new Error(`queryLedgerRange failed: ${err?.message ?? 'unknown error'}`);
+    throw new Error(`parseLedgerQuery failed: ${err?.message ?? 'unknown error'}`);
+  }
+}
+
+/**
+ * 獲取記帳條目（DB 查詢）
+ */
+export async function getLedgerEntries(params: {
+  userId: string;
+  startMs: number;
+  endMs: number;
+}): Promise<LedgerEntryRow[]> {
+  try {
+    return db.listLedgerEntriesByRange(params.userId, params.startMs, params.endMs);
+  } catch (err: any) {
+    throw new Error(`getLedgerEntries failed: ${err?.message ?? 'unknown error'}`);
   }
 }
 

@@ -1,5 +1,5 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
-import { Capability, SendMessageParams, SaveLedgerInput, StartSessionParams, QueueItem, ParsedLedgerProposalResult, SaveMessageArgs, InitializeSessionArgs } from '../types';
+import { Capability, SendMessageParams, SaveLedgerInput, StartSessionParams, QueueItem, ParsedLedgerProposalResult, SaveMessageArgs, InitializeSessionArgs, LedgerQueryRangeResult, LedgerEntryRow } from '../types';
 
 /**
  * 工作流模式說明：
@@ -34,8 +34,9 @@ interface ChatActivities {
   chatReply: (userMessage: string) => Promise<string>;
   weatherReply: (userMessage: string) => Promise<string>;
   parseLedgerProposal: (args: SendMessageParams) => Promise<ParsedLedgerProposalResult>;
+  parseLedgerQuery: (text: string) => Promise<LedgerQueryRangeResult>;
+  getLedgerEntries: (params: { userId: string; startMs: number; endMs: number }) => Promise<LedgerEntryRow[]>;
   saveLedger: (args: SaveLedgerInput) => Promise<string>;
-  queryLedgerRange: (args: SendMessageParams) => Promise<string>;
   undoLastLedger: (args: SendMessageParams) => Promise<string>;
   saveMessage: (params: SaveMessageArgs) => Promise<void>;
   initializeSession: (params: InitializeSessionArgs) => Promise<void>;
@@ -56,6 +57,34 @@ function isBusinessError(msg: string): boolean {
   return msg.includes('Not a ledger')
     || msg.includes('Invalid date')
     || msg.includes('Unsupported range');
+}
+
+/**
+ * 格式化記帳摘要（純函數，可在 Workflow 中執行）
+ */
+function formatLedgerSummary(entries: LedgerEntryRow[], start: Date, end: Date): string {
+  let incomeCents = 0;
+  let expenseCents = 0;
+
+  const lines = entries.map((entry: LedgerEntryRow) => {
+    const sign = entry.amount_cents >= 0 ? '+' : '-';
+    if (entry.amount_cents >= 0) {
+      incomeCents += entry.amount_cents;
+    } else {
+      expenseCents += entry.amount_cents;
+    }
+    const amountAbs = Math.abs(entry.amount_cents) / 100;
+    const occurredAt = new Date(entry.occurred_at_ms).toLocaleString();
+    return `${occurredAt} ${entry.title} ${sign}$${amountAbs.toFixed(2)}`;
+  });
+
+  const income = (incomeCents / 100).toFixed(2);
+  const expense = (Math.abs(expenseCents) / 100).toFixed(2);
+  const net = ((incomeCents + expenseCents) / 100).toFixed(2);
+
+  const header = `範圍：${start.toISOString().slice(0, 10)} 至 ${end.toISOString().slice(0, 10)}\n收入：$${income}  支出：-$${expense}  淨額：$${net}`;
+  const body = lines.length ? lines.join('\n') : '（無資料）';
+  return `${header}\n${body}`;
 }
 
 /**
@@ -102,9 +131,9 @@ async function generateReply(
   timestamp: number
 ): Promise<string> {
   switch (capability) {
-    case 'weather':
+    case 'weather': {
       return await activities.weatherReply(item.text);
-
+    }
     case 'ledger_proposal': {
       // 解析記帳提議
       const ledger = await activities.parseLedgerProposal({
@@ -129,7 +158,7 @@ async function generateReply(
       return `已記帳：${ledger.explain}`;
     }
 
-    case 'ledger_undo':
+    case 'ledger_undo': {
       // 撤銷最近一筆記帳
       return await activities.undoLastLedger({
         userId: item.userId,
@@ -138,9 +167,22 @@ async function generateReply(
         startedAtMs: timestamp,
         requestId: item.requestId,
       });
+    }
 
-    case 'ledger_query':
-      return await activities.queryLedgerRange(item);
+    case 'ledger_query': {
+      // 1. 解析查詢範圍（AI 調用）
+      const range = await activities.parseLedgerQuery(item.text);
+      
+      // 2. 查詢記帳條目（DB 查詢）
+      const entries = await activities.getLedgerEntries({
+        userId: item.userId,
+        startMs: range.startMs,
+        endMs: range.endMs,
+      });
+      
+      // 3. 格式化輸出（純函數，在 Workflow 中執行）
+      return formatLedgerSummary(entries, new Date(range.startMs), new Date(range.endMs));
+    }
 
     case 'chat':
     default:
