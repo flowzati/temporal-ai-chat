@@ -68,9 +68,12 @@ export function computeLedgerRange(input: LedgerRangeInput, baseDate: Date): { s
   throw new Error('Unsupported range');
 }
 
+/**
+ * 格式化記帳摘要（純函數，可在 Workflow 中執行）
+ */
 export function formatLedgerSummary(entries: LedgerEntryRow[], start: Date, end: Date): string {
   let incomeCents = 0;
-  let expenseCents = 0; // negative values
+  let expenseCents = 0;
 
   const lines = entries.map((entry: LedgerEntryRow) => {
     const sign = entry.amount_cents >= 0 ? '+' : '-';

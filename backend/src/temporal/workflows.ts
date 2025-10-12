@@ -1,6 +1,6 @@
 import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
 import { Capability, SendMessageParams, SaveLedgerInput, StartSessionParams, QueueItem, ParsedLedgerProposalResult, SaveMessageArgs, InitializeSessionArgs, LedgerQueryRangeResult, LedgerEntryRow } from '../types';
-
+import * as ledger from '../utils/ledger';
 /**
  * 工作流模式說明：
  * 
@@ -57,34 +57,6 @@ function isBusinessError(msg: string): boolean {
   return msg.includes('Not a ledger')
     || msg.includes('Invalid date')
     || msg.includes('Unsupported range');
-}
-
-/**
- * 格式化記帳摘要（純函數，可在 Workflow 中執行）
- */
-function formatLedgerSummary(entries: LedgerEntryRow[], start: Date, end: Date): string {
-  let incomeCents = 0;
-  let expenseCents = 0;
-
-  const lines = entries.map((entry: LedgerEntryRow) => {
-    const sign = entry.amount_cents >= 0 ? '+' : '-';
-    if (entry.amount_cents >= 0) {
-      incomeCents += entry.amount_cents;
-    } else {
-      expenseCents += entry.amount_cents;
-    }
-    const amountAbs = Math.abs(entry.amount_cents) / 100;
-    const occurredAt = new Date(entry.occurred_at_ms).toLocaleString();
-    return `${occurredAt} ${entry.title} ${sign}$${amountAbs.toFixed(2)}`;
-  });
-
-  const income = (incomeCents / 100).toFixed(2);
-  const expense = (Math.abs(expenseCents) / 100).toFixed(2);
-  const net = ((incomeCents + expenseCents) / 100).toFixed(2);
-
-  const header = `範圍：${start.toISOString().slice(0, 10)} 至 ${end.toISOString().slice(0, 10)}\n收入：$${income}  支出：-$${expense}  淨額：$${net}`;
-  const body = lines.length ? lines.join('\n') : '（無資料）';
-  return `${header}\n${body}`;
 }
 
 /**
@@ -181,7 +153,7 @@ async function generateReply(
       });
       
       // 3. 格式化輸出（純函數，在 Workflow 中執行）
-      return formatLedgerSummary(entries, new Date(range.startMs), new Date(range.endMs));
+      return ledger.formatLedgerSummary(entries, new Date(range.startMs), new Date(range.endMs));
     }
 
     case 'chat':
@@ -190,11 +162,8 @@ async function generateReply(
   }
 }
 
-function performContinueAsNew(idsToKeep: string[], originalTotal: number, sessionId: string, startedAtMs: number) {
-  const kept = idsToKeep.length;
+function performContinueAsNew(idsToKeep: string[], sessionId: string, startedAtMs: number) {
   const size = JSON.stringify(idsToKeep).length;
-  console.log(`[ContinueAsNew] ${kept}/${originalTotal} IDs (${size} bytes)`);
-
   if (size > IDEMPOTENCY_CONFIG.maxStateSizeBytes) {
     console.warn(`[ContinueAsNew] Large state: ${size} bytes`);
   }
@@ -205,8 +174,6 @@ function performContinueAsNew(idsToKeep: string[], originalTotal: number, sessio
     processedRequestIds: idsToKeep,
   });
 }
-
-// -------------------- 幂等性管理器 --------------------
 
 /**
  * 創建幂等性管理器
@@ -259,11 +226,9 @@ function createIdempotencyManager(initialIds: string[] = []) {
     getStateForContinueAsNew() {
       const allIds = Array.from(processedIds);
       const idsToKeep = allIds.slice(-IDEMPOTENCY_CONFIG.maxCachedRequestIds);
-
-      return {
-        idsToKeep,        // 要傳遞的 requestId 列表
-        originalTotal: allIds.length   // 當前總數（用於日誌）
-      };
+      console.log(`[ContinueAsNew] ${idsToKeep.length}/${allIds.length} IDs (${JSON.stringify(idsToKeep).length} bytes)`);
+      // 要傳遞的 requestId 列表
+      return idsToKeep;
     }
   };
 }
@@ -362,8 +327,8 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
     }
 
     if (workflowInfo().continueAsNewSuggested) {
-      const { idsToKeep, originalTotal } = idempotency.getStateForContinueAsNew();
-      performContinueAsNew(idsToKeep, originalTotal, startSessionParams.sessionId, startSessionParams.startedAtMs);
+      const idsToKeep = idempotency.getStateForContinueAsNew();
+      performContinueAsNew(idsToKeep, startSessionParams.sessionId, startSessionParams.startedAtMs);
     }
   }
 }

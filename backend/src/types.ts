@@ -20,11 +20,6 @@ export interface QueueItem extends SendMessageParams {
   completion: Trigger<string>;
 }
 
-export interface ConfirmLedgerArgs extends ChatBase {
-  proposal: { title: string; amountCents: number; occurredAtMs: number };
-  requestId?: string; // 幂等性：请求唯一标识
-}
-
 export interface SaveLedgerInput extends ChatBase {
   title: string;
   amountCents: number;
