@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useWebSocket, useSessions, useMessages, useLedger } from './hooks';
+import { useWebSocket, useSessions, useMessages } from './hooks';
 import { useChat } from './hooks/useChat';
 import { Sidebar, ChatMessages, MessageInput } from './components';
 
@@ -16,8 +16,7 @@ export function App() {
   // 自定義 hooks
   const { wsRef, connected } = useWebSocket(wsUrl);
   const sessions = useSessions(apiUrl);
-  const { messages, setMessages, pendingLedger, setPendingLedger } =
-    useMessages(apiUrl, sessionId);
+  const { messages, setMessages } = useMessages(apiUrl, sessionId);
 
   const { input, setInput, waitingReply, canSend, sendMessage, cancelAll } =
     useChat({
@@ -25,18 +24,8 @@ export function App() {
       sessionId: sessionId || 'new',
       userId,
       setMessages,
-      setPendingLedger,
       setSessionId,
     });
-
-  const { confirmLedger, cancelLedger } = useLedger({
-    wsRef,
-    sessionId: sessionId || 'new',
-    userId,
-    pendingLedger,
-    setPendingLedger,
-    setMessages,
-  });
 
   // 事件處理
   const handleNewSession = () => {
@@ -88,10 +77,7 @@ export function App() {
 
         <ChatMessages
           messages={messages}
-          pendingLedger={pendingLedger}
           waitingReply={waitingReply}
-          onConfirmLedger={confirmLedger}
-          onCancelLedger={cancelLedger}
         />
 
         <MessageInput

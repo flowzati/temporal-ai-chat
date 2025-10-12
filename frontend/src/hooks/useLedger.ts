@@ -27,8 +27,8 @@ export function useLedger({
   const confirmLedger = () => {
     if (!wsRef.current || !pendingLedger) return;
     
-    // 將確認記帳作為普通訊息發送，使用特殊前綴標識
-    const confirmMessage = `__CONFIRM_LEDGER__:${JSON.stringify(pendingLedger.proposal)}`;
+    // 發送普通確認訊息，由 AI 識別為確認記帳意圖
+    const confirmMessage = '確認記帳';
     const payload = {
       type: 'user_message',
       sessionId,
@@ -41,7 +41,7 @@ export function useLedger({
     // 在前端顯示用戶的確認操作
     setMessages((prev) => [
       ...prev,
-      { role: 'user', content: '確認記帳' },
+      { role: 'user', content: confirmMessage },
     ]);
     
     setPendingLedger(null);

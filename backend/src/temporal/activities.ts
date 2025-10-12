@@ -93,3 +93,33 @@ export async function initializeSession(params: InitializeSessionArgs): Promise<
     throw new Error(`initializeSession failed: ${err?.message ?? 'unknown error'}`);
   }
 }
+
+/**
+ * 撤銷最近一筆記帳
+ */
+export async function undoLastLedger(params: SendMessageParams): Promise<string> {
+  try {
+    // 獲取最近一筆記帳
+    const lastEntry = db.getLastLedgerEntry(params.userId, params.sessionId);
+    
+    if (!lastEntry) {
+      return '沒有可以撤銷的記帳記錄';
+    }
+    
+    // 刪除該記帳
+    const deleted = db.deleteLedgerEntry(lastEntry.id);
+    
+    if (!deleted) {
+      throw new Error('刪除記帳失敗');
+    }
+    
+    // 格式化金額顯示
+    const amountDisplay = lastEntry.amount_cents >= 0 
+      ? `+${(lastEntry.amount_cents / 100).toFixed(2)}`
+      : `${(lastEntry.amount_cents / 100).toFixed(2)}`;
+    
+    return `已撤銷記帳：${lastEntry.title} ${amountDisplay} 元`;
+  } catch (err: any) {
+    throw new Error(`undoLastLedger failed: ${err?.message ?? 'unknown error'}`);
+  }
+}

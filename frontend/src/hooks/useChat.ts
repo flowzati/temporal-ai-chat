@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChatMessage, PendingLedger } from '../types';
+import { ChatMessage } from '../types';
 import { sendWebSocketMessage } from '../utils/websocket';
 
 /**
@@ -14,7 +14,6 @@ interface UseChatParams {
   sessionId: string;
   userId: string;
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
-  setPendingLedger: React.Dispatch<React.SetStateAction<PendingLedger | null>>;
   setSessionId?: React.Dispatch<React.SetStateAction<string | null>>;
 }
 
@@ -23,7 +22,6 @@ export function useChat({
   sessionId,
   userId,
   setMessages,
-  setPendingLedger,
   setSessionId,
 }: UseChatParams) {
   const [input, setInput] = useState('');
@@ -46,24 +44,7 @@ export function useChat({
             setSessionId(data.sessionId);
           }
           
-          // 嘗試解析是否為 ledger_proposal
-          try {
-            const parsed = JSON.parse(String(data.message));
-            if (parsed?.__kind === 'ledger_proposal' && parsed?.proposal) {
-              setPendingLedger({
-                explain: String(parsed.explain ?? ''),
-                proposal: parsed.proposal,
-              });
-              setMessages((prev) => [
-                ...prev,
-                {
-                  role: 'assistant',
-                  content: parsed.explain ?? '請確認記帳',
-                },
-              ]);
-              return;
-            }
-          } catch {}
+          // 直接顯示 AI 回覆
           setMessages((prev) => [
             ...prev,
             { role: 'assistant', content: data.message },
@@ -94,7 +75,7 @@ export function useChat({
     return () => {
       ws.removeEventListener('message', handleMessage);
     };
-  }, [wsRef, setMessages, setPendingLedger, setSessionId]);
+  }, [wsRef, setMessages, setSessionId]);
 
   const canSend = useMemo(
     () => input.trim().length > 0 && !waitingReply,

@@ -36,6 +36,7 @@ interface ChatActivities {
   parseLedgerProposal: (args: SendMessageParams) => Promise<ParsedLedgerProposalResult>;
   saveLedger: (args: SaveLedgerInput) => Promise<string>;
   queryLedgerRange: (args: SendMessageParams) => Promise<string>;
+  undoLastLedger: (args: SendMessageParams) => Promise<string>;
   saveMessage: (params: SaveMessageArgs) => Promise<void>;
   initializeSession: (params: InitializeSessionArgs) => Promise<void>;
 }
@@ -105,6 +106,7 @@ async function generateReply(
       return await activities.weatherReply(item.text);
 
     case 'ledger_proposal': {
+      // 解析記帳提議
       const ledger = await activities.parseLedgerProposal({
         userId: item.userId,
         sessionId: item.sessionId,
@@ -112,18 +114,30 @@ async function generateReply(
         startedAtMs: timestamp,
         requestId: item.requestId,
       });
-      return JSON.stringify({
-        __kind: 'ledger_proposal',
-        proposal: {
-          userId: ledger.userId,
-          sessionId: ledger.sessionId,
-          title: ledger.title,
-          amountCents: ledger.amountCents,
-          occurredAtMs: ledger.occurredAtMs,
-        },
-        explain: ledger.explain
+      
+      // 直接執行記帳
+      await activities.saveLedger({
+        userId: ledger.userId,
+        sessionId: ledger.sessionId,
+        title: ledger.title,
+        amountCents: ledger.amountCents,
+        occurredAtMs: ledger.occurredAtMs,
+        requestId: item.requestId,
       });
+      
+      // 返回記帳確認訊息
+      return `已記帳：${ledger.explain}`;
     }
+
+    case 'ledger_undo':
+      // 撤銷最近一筆記帳
+      return await activities.undoLastLedger({
+        userId: item.userId,
+        sessionId: item.sessionId,
+        text: item.text,
+        startedAtMs: timestamp,
+        requestId: item.requestId,
+      });
 
     case 'ledger_query':
       return await activities.queryLedgerRange(item);
@@ -132,55 +146,6 @@ async function generateReply(
     default:
       return await activities.chatReply(item.text);
   }
-}
-
-/**
- * 處理確認記帳訊息
- * 
- * @param item - 佇列項目（包含確認記帳的特殊格式訊息）
- * @param timestamp - 訊息時間戳
- * @returns 記帳確認結果
- */
-async function processConfirmLedger(item: QueueItem, timestamp: number): Promise<string> {
-  // 解析 proposal 數據
-  const proposalJson = item.text.substring('__CONFIRM_LEDGER__:'.length);
-  const proposal = JSON.parse(proposalJson) as {
-    userId: string;
-    sessionId: string;
-    title: string;
-    amountCents: number;
-    occurredAtMs: number;
-  };
-
-  // 儲存用戶確認訊息（顯示為"確認記帳"）
-  await activities.saveMessage({
-    sessionId: item.sessionId,
-    role: 'user',
-    content: '確認記帳',
-    timestamp,
-    messageId: `user-${item.requestId}`,
-  });
-
-  // 執行記帳
-  const result = await activities.saveLedger({
-    userId: proposal.userId,
-    sessionId: proposal.sessionId,
-    title: proposal.title,
-    amountCents: proposal.amountCents,
-    occurredAtMs: proposal.occurredAtMs,
-    requestId: item.requestId,
-  });
-
-  // 儲存確認結果訊息
-  await activities.saveMessage({
-    sessionId: item.sessionId,
-    role: 'assistant',
-    content: result,
-    timestamp,
-    messageId: `assistant-${item.requestId}`,
-  });
-
-  return result;
 }
 
 function performContinueAsNew(idsToKeep: string[], originalTotal: number, sessionId: string, startedAtMs: number) {
@@ -308,21 +273,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       sessionInitialized = true;
     }
 
-    // 1. 檢測是否為確認記帳訊息
-    if (item.text.startsWith('__CONFIRM_LEDGER__:')) {
-      try {
-        const result = await processConfirmLedger(item, timestamp);
-        item.completion.resolve(result);
-        return;
-      } catch (err: any) {
-        const errorMsg = `確認記帳失敗：${err?.message ?? 'Unknown error'}`;
-        await saveSystemMessage(item.sessionId, errorMsg, timestamp);
-        item.completion.resolve(errorMsg);
-        return;
-      }
-    }
-
-    // 2.儲存用戶訊息（正常消息）
+    // 1.儲存用戶訊息
     await activities.saveMessage({
       sessionId: item.sessionId,
       role: 'user',
@@ -331,13 +282,13 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       messageId: `user-${item.requestId}`,
     });
 
-    // 3.判斷能力並生成回覆
+    // 2.判斷能力並生成回覆
     const capability = await activities.decideCapability(item.text);
 
-    // 4.生成回覆
+    // 3.生成回覆
     const reply = await generateReply(capability, item, timestamp);
 
-    // 5.儲存 AI 回覆
+    // 4.儲存 AI 回覆
     await activities.saveMessage({
       sessionId: item.sessionId,
       role: 'assistant',
@@ -346,7 +297,7 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       messageId: `assistant-${item.requestId}`,
     });
 
-    // 6. 返回回覆
+    // 5. 返回回覆
     item.completion.resolve(reply);
   }
 

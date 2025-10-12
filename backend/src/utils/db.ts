@@ -182,4 +182,20 @@ export function sumLedgerEntriesByRange(userId: string, startMs: number, endMs: 
   return row?.total ?? 0;
 }
 
+export function getLastLedgerEntry(userId: string, sessionId?: string): LedgerEntryRow | null {
+  const db = getDb();
+  const query = sessionId
+    ? 'SELECT id, user_id, session_id, title, amount_cents, occurred_at_ms, created_at_ms FROM ledger_entries WHERE user_id = ? AND session_id = ? ORDER BY created_at_ms DESC LIMIT 1'
+    : 'SELECT id, user_id, session_id, title, amount_cents, occurred_at_ms, created_at_ms FROM ledger_entries WHERE user_id = ? ORDER BY created_at_ms DESC LIMIT 1';
+  
+  const params = sessionId ? [userId, sessionId] : [userId];
+  return (db.prepare(query).get(...params) as LedgerEntryRow | undefined) ?? null;
+}
+
+export function deleteLedgerEntry(entryId: number): boolean {
+  const db = getDb();
+  const result = db.prepare('DELETE FROM ledger_entries WHERE id = ?').run(entryId);
+  return result.changes > 0;
+}
+
 

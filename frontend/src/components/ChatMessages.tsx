@@ -1,23 +1,16 @@
 import React, { useEffect, useRef } from 'react';
-import { ChatMessage as ChatMessageType, PendingLedger } from '../types';
+import { ChatMessage as ChatMessageType } from '../types';
 import { ChatMessage } from './ChatMessage';
-import { LedgerConfirmCard } from './LedgerConfirmCard';
 import { LoadingIndicator } from './LoadingIndicator';
 
 interface ChatMessagesProps {
   messages: ChatMessageType[];
-  pendingLedger: PendingLedger | null;
   waitingReply: boolean;
-  onConfirmLedger: () => void;
-  onCancelLedger: () => void;
 }
 
 export function ChatMessages({
   messages,
-  pendingLedger,
   waitingReply,
-  onConfirmLedger,
-  onCancelLedger,
 }: ChatMessagesProps) {
   const messagesBoxRef = useRef<HTMLDivElement | null>(null);
 
@@ -44,14 +37,6 @@ export function ChatMessages({
       ))}
 
       {waitingReply && <LoadingIndicator />}
-
-      {pendingLedger && (
-        <LedgerConfirmCard
-          pendingLedger={pendingLedger}
-          onConfirm={onConfirmLedger}
-          onCancel={onCancelLedger}
-        />
-      )}
     </div>
   );
 }

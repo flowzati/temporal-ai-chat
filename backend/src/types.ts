@@ -44,7 +44,7 @@ export interface LedgerQueryRangeResult {
   endMs: number;
 }
 
-export type Capability = 'chat' | 'weather' | 'ledger_proposal' | 'ledger_query';
+export type Capability = 'chat' | 'weather' | 'ledger_proposal' | 'ledger_query' | 'ledger_undo';
 
 export interface LedgerRangeInput {
   range: 'today' | 'yesterday' | 'date' | 'month' | 'week';

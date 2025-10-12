@@ -21,13 +21,16 @@ export function initOpenAIOnce(): void {
 initOpenAIOnce();
 
 export async function decideCapability(userMessage: string): Promise<Capability> {
-  const schema = z.object({ type: z.enum(['chat', 'weather', 'ledger_proposal', 'ledger_query']) });
+  const schema = z.object({ type: z.enum(['chat', 'weather', 'ledger_proposal', 'ledger_query', 'ledger_undo']) });
   const agent = new Agent({
     name: 'Capability Router',
     instructions:
-      '請判斷使用者訊息應該走哪個功能，僅輸出 JSON：{"type":"chat|weather|ledger_proposal|ledger_query"}。\n' +
-      '- 一般對話 → chat\n- 問天氣、氣溫、下雨、晴、°C → weather\n' +
-      '- 記帳新增/扣除 → ledger_proposal\n- 查詢當日/昨日/特定日期/當月花費 → ledger_query',
+      '請判斷使用者訊息應該走哪個功能，僅輸出 JSON：{"type":"chat|weather|ledger_proposal|ledger_query|ledger_undo"}。\n' +
+      '- 一般對話 → chat\n' +
+      '- 問天氣、氣溫、下雨、晴、°C → weather\n' +
+      '- 記帳新增/扣除 → ledger_proposal\n' +
+      '- 查詢當日/昨日/特定日期/當月花費 → ledger_query\n' +
+      '- 撤銷/刪除最近一筆記帳（例如：「撤銷」、「刪除上一筆」、「取消記帳」、「記錯了」） → ledger_undo',
   });
   const out = await run(agent, userMessage);
   const parsed = schema.parse(typeof out.finalOutput === 'string' ? JSON.parse(out.finalOutput) : out.finalOutput);
