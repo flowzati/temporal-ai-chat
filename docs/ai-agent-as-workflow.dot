@@ -1,0 +1,180 @@
+digraph {
+    graph [
+        fontname="PingFang TC"
+        fontsize=13
+        compound=true
+        rankdir=TB
+        bgcolor="#F8F9FA"
+        pad=0.8
+        nodesep=0.5
+        ranksep=0.6
+        splines=spline
+    ]
+    node [
+        fontname="PingFang TC"
+        fontsize=11
+        style="filled,rounded"
+        shape=box
+        margin="0.2,0.1"
+    ]
+    edge [
+        fontname="PingFang TC"
+        fontsize=10
+    ]
+
+    // ──────────────────────────────────────────────────────
+    // 外層：chatSessionWorkflow（簡單帶過）
+    // ──────────────────────────────────────────────────────
+    subgraph cluster_workflow {
+        label="chatSessionWorkflow（Temporal Workflow）\n長駐 · 訊息串行排隊 · idle timeout 自動結束"
+        style="filled,rounded"
+        color="#2E86C1"
+        fillcolor="#EBF5FF"
+        fontcolor="#1A5276"
+        fontsize=14
+        labeljust=l
+        penwidth=2
+
+        Input [
+            label="📨 Update: sendMessage\n（用戶傳入訊息）"
+            fillcolor="#D6EAF8"
+            color="#2E86C1"
+            penwidth=1.5
+        ]
+        Queue [
+            label="MessageQueue\n串行排隊，等待處理"
+            fillcolor="#D5F5E3"
+            color="#27AE60"
+        ]
+        Save [
+            label="saveMessage Activity\n💾 儲存用戶訊息 + AI 回覆到 DB"
+            fillcolor="#FDEBD0"
+            color="#E67E22"
+            penwidth=1.5
+        ]
+        Reply [
+            label="✅ Update 完成：回傳回覆"
+            fillcolor="#FADBD8"
+            color="#C0392B"
+            penwidth=1.5
+        ]
+
+        // ──────────────────────────────────────────────────
+        // 內層：AI Agent Loop（重點）
+        // ──────────────────────────────────────────────────
+        subgraph cluster_agent {
+            label="🤖  AI Agent Loop — processMessage"
+            style="filled,rounded"
+            color="#7D3C98"
+            fillcolor="#F5EEF8"
+            fontcolor="#6C3483"
+            fontsize=13
+            penwidth=2
+            labeljust=l
+
+            Decide [
+                label="decideCapability Activity\n🧠 LLM 判斷意圖\n→ chat / weather / ledger_proposal / ledger_query"
+                fillcolor="#E8DAEF"
+                color="#7D3C98"
+                penwidth=1.5
+            ]
+
+            // ── 路徑 1：一般聊天 ──
+            Chat [
+                label="chatReply Activity\n💬 LLM 直接產生回覆"
+                fillcolor="#EAF2FF"
+                color="#2980B9"
+            ]
+
+            // ── 路徑 2：天氣（tool-use Agent loop，最能說明 Agent = Workflow）──
+            subgraph cluster_weather {
+                label="weatherReply Activity（工具使用 Agent）"
+                style="filled,rounded"
+                color="#D4AC0D"
+                fillcolor="#FEF9E7"
+                fontcolor="#7D6608"
+                fontsize=12
+                penwidth=2
+
+                W1 [label="① LLM 推理：需要天氣資料" fillcolor="#FDEBD0" color="#D4AC0D"]
+                W2 [label="② tool_call: getWeather(location)\n   呼叫外部氣象 API" fillcolor="#FAD7A0" color="#D35400" shape=box]
+                W3 [label="③ LLM 整合 API 結果\n   產生自然語言回覆" fillcolor="#FDEBD0" color="#D4AC0D"]
+                W1 -> W2 -> W3
+            }
+
+            // ── 路徑 3：記帳 ──
+            subgraph cluster_ledger {
+                label="記帳 Activity 鏈"
+                style="filled,rounded"
+                color="#1E8449"
+                fillcolor="#EAFAF1"
+                fontsize=12
+                penwidth=1.5
+
+                L1 [label="parseLedgerProposal Activity\n🧠 LLM 解析金額 / 項目 / 時間" fillcolor="#D5F5E3" color="#1E8449"]
+                L2 [label="saveLedger Activity\n💾 DB 寫入記帳記錄" fillcolor="#D5F5E3" color="#145A32"]
+                L1 -> L2
+            }
+
+            // ── 路徑 4：查帳 ──
+            subgraph cluster_ledgerq {
+                label="查帳 Activity 鏈"
+                style="filled,rounded"
+                color="#117A65"
+                fillcolor="#E8F8F5"
+                fontsize=12
+                penwidth=1.5
+
+                LQ1 [label="parseLedgerQuery Activity\n🧠 LLM 解析查詢時間範圍" fillcolor="#D1F2EB" color="#117A65"]
+                LQ2 [label="getLedgerEntries Activity\n💾 DB 查詢符合條目" fillcolor="#D1F2EB" color="#0E6655"]
+                LQ3 [label="formatSummary\n（純函數，Workflow 中執行）" fillcolor="#D1F2EB" color="#0A3D31"]
+                LQ1 -> LQ2 -> LQ3
+            }
+
+            // Decide 分派四條路徑
+            Decide -> Chat     [label="  'chat'"]
+            Decide -> W1       [label="  'weather'" lhead=cluster_weather]
+            Decide -> L1       [label="  'ledger_proposal'" lhead=cluster_ledger]
+            Decide -> LQ1      [label="  'ledger_query'" lhead=cluster_ledgerq]
+        }
+
+        // 主幹流程
+        Input -> Queue -> Decide
+
+        // 四條路徑匯合到 Save
+        Chat  -> Save
+        W3    -> Save [ltail=cluster_weather]
+        L2    -> Save [ltail=cluster_ledger]
+        LQ3   -> Save [ltail=cluster_ledgerq]
+
+        Save -> Reply
+
+        // 回流：等待下一則訊息
+        Reply -> Input [
+            style=dashed
+            label="  等待下一則訊息\n  (condition / idle timeout 前循環)"
+            constraint=false
+            color="#7F8C8D"
+            fontcolor="#7F8C8D"
+        ]
+    }
+
+    // ──────────────────────────────────────────────────────
+    // 標題說明區（圖外）
+    // ──────────────────────────────────────────────────────
+    legend [
+        shape=none
+        margin=0
+        label=<
+<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6" BGCOLOR="#FFFFFF">
+  <TR><TD COLSPAN="2" BGCOLOR="#2C3E50" ALIGN="CENTER"><FONT COLOR="white" POINT-SIZE="13"><B>AI Agent = Workflow：概念對應</B></FONT></TD></TR>
+  <TR><TD BGCOLOR="#D6DBDF"><B>AI Agent 概念</B></TD><TD BGCOLOR="#D6DBDF"><B>Temporal 實作</B></TD></TR>
+  <TR><TD>Agent 狀態記憶</TD><TD>Workflow 狀態（幂等 ID cache）</TD></TR>
+  <TR><TD>Think → Act 循環</TD><TD>while(true) + condition()</TD></TR>
+  <TR><TD>工具呼叫</TD><TD>Activity（含 retry / timeout）</TD></TR>
+  <TR><TD>等待用戶下一個輸入</TD><TD>condition(hasWorkflowEvent)</TD></TR>
+  <TR><TD>Agent crash recovery</TD><TD>Temporal 自動 replay</TD></TR>
+</TABLE>>
+        fontname="PingFang TC"
+    ]
+}

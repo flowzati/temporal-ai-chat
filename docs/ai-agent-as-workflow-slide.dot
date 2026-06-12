@@ -1,0 +1,118 @@
+digraph {
+    graph [
+        fontname="PingFang TC"
+        fontsize=14
+        compound=true
+        rankdir=TB
+        bgcolor="white"
+        pad=1.0
+        nodesep=0.7
+        ranksep=0.8
+        splines=spline
+    ]
+    node [
+        fontname="PingFang TC"
+        fontsize=13
+        style="filled,rounded"
+        shape=box
+        margin="0.25,0.15"
+        penwidth=2
+    ]
+    edge [
+        fontname="PingFang TC"
+        fontsize=12
+        penwidth=1.8
+    ]
+
+    // ── 外層 Workflow（淡底、細框，不搶焦點）──
+    subgraph cluster_workflow {
+        label="Temporal Workflow：長駐 · 排隊 · 耐久"
+        style="filled,rounded"
+        color="#AED6F1"
+        fillcolor="#EBF5FF"
+        fontcolor="#1A5276"
+        fontsize=15
+        penwidth=2
+        labeljust=l
+
+        Input [
+            label="📨 用戶訊息\n（Temporal Update）"
+            fillcolor="#D6EAF8"
+            color="#2E86C1"
+        ]
+
+        // ── 內層 Agent Loop（主角）──
+        subgraph cluster_agent {
+            label="🤖  AI Agent Loop"
+            style="filled,rounded"
+            color="#8E44AD"
+            fillcolor="#F5EEF8"
+            fontcolor="#6C3483"
+            fontsize=16
+            penwidth=3
+
+            Decide [
+                label="🧠 decideCapability\n（LLM 判斷意圖）\n─────────────────\nchat  ·  weather\nledger_proposal  ·  ledger_query"
+                fillcolor="#E8DAEF"
+                color="#7D3C98"
+                fontsize=13
+            ]
+
+            Chat [
+                label="💬 chatReply\nActivity"
+                fillcolor="#EBF5FF"
+                color="#2980B9"
+            ]
+
+            Ledger [
+                label="📒 記帳 / 查帳\nActivities"
+                fillcolor="#EAFAF1"
+                color="#1E8449"
+            ]
+
+            // weatherReply：展開 tool-use loop，這是核心論點
+            subgraph cluster_weather {
+                label="weatherReply Activity — 工具使用 Agent"
+                style="filled,rounded"
+                color="#D4AC0D"
+                fillcolor="#FEF9E7"
+                fontcolor="#7D6608"
+                fontsize=14
+                penwidth=2.5
+
+                W1 [label="① LLM：需要天氣資料" fillcolor="#FEF9E7" color="#D4AC0D" fontsize=13]
+                W2 [label="② tool_call\ngetWeather( location )" fillcolor="#FAD7A0" color="#D35400" fontsize=13]
+                W3 [label="③ LLM：整合結果\n產生回覆" fillcolor="#FEF9E7" color="#D4AC0D" fontsize=13]
+                W1 -> W2 -> W3 [penwidth=2]
+            }
+
+            Decide -> Chat   [label="  chat" color="#2980B9" fontcolor="#2980B9"]
+            Decide -> W1     [label="  weather" lhead=cluster_weather color="#D4AC0D" fontcolor="#7D6608"]
+            Decide -> Ledger [label="  ledger_*" color="#1E8449" fontcolor="#1E8449"]
+        }
+
+        Save [
+            label="💾 saveMessage Activity\n（DB 儲存）"
+            fillcolor="#FDEBD0"
+            color="#E67E22"
+        ]
+        Reply [
+            label="✅ 回傳回覆"
+            fillcolor="#EAFAF1"
+            color="#1E8449"
+        ]
+
+        Input -> Decide
+        Chat   -> Save
+        W3     -> Save [ltail=cluster_weather]
+        Ledger -> Save
+        Save -> Reply
+        Reply -> Input [
+            style=dashed
+            label="  等待下一則訊息"
+            constraint=false
+            color="#7F8C8D"
+            fontcolor="#7F8C8D"
+        ]
+    }
+}
