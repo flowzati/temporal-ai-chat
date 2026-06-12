@@ -9,6 +9,7 @@ const CHAT_WORKFLOW = {
   },
   signals: {
     cancel: 'cancel',
+    close: 'close',
   },
 } as const;
 
@@ -66,6 +67,7 @@ export class ChatWorkflowClient {
       args: [{ sessionId, startedAtMs }],
       taskQueue: this.taskQueue,
       workflowId,
+      workflowIdReusePolicy: 'ALLOW_DUPLICATE',
     });
 
     this.workflowCache.set(workflowId, handle);
@@ -106,5 +108,22 @@ export class ChatWorkflowClient {
     await this.executeWorkflowOperation(sessionId, (handle) =>
       handle.signal(CHAT_WORKFLOW.signals.cancel)
     );
+  }
+
+  async closeSessionIfRunning(sessionId: string, cutoffMs: number): Promise<boolean> {
+    const workflowId = this.getWorkflowId(sessionId);
+    const handle = this.getWorkflowHandle(sessionId);
+
+    try {
+      await handle.signal(CHAT_WORKFLOW.signals.close, cutoffMs);
+      this.workflowCache.delete(workflowId);
+      return true;
+    } catch (error: any) {
+      if (isWorkflowNotFoundError(error) || hasWorkflowCompletedDuringUpdate(error)) {
+        this.workflowCache.delete(workflowId);
+        return false;
+      }
+      throw error;
+    }
   }
 }

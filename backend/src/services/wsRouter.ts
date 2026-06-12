@@ -1,7 +1,6 @@
 import WebSocket, { RawData } from 'ws';
 import { randomUUID } from 'crypto';
-import { SendMessageParams } from '../types';
-import { ChatWorkflowClient } from '../temporal/chatWorkflowClient';
+import { ChatWorkflowGateway, SendMessageParams } from '../types';
 
 // ==================== 常量定义 ====================
 const MESSAGE_TYPES = {
@@ -50,7 +49,7 @@ interface ErrorResponse {
 // Handler 上下文
 export interface MessageHandlerContext {
   ws: WebSocket;
-  workflowClient: ChatWorkflowClient;
+  workflowClient: ChatWorkflowGateway;
   sendResponse: (response: AssistantMessageResponse | ErrorResponse) => void;
   sendError: (error: string, sessionId?: string) => void;
 }
@@ -80,7 +79,7 @@ export function startIdempotencyCacheCleanup(): void {
         idempotencyCache.delete(requestId);
       }
     }
-  }, 60 * 1000); // 每分钟清理一次
+  }, 60 * 1000).unref(); // 每分钟清理一次
 }
 
 // ==================== 工具函数 ====================
@@ -229,9 +228,9 @@ async function handleCancel(
 export class WebSocketRouter {
   private handlers: Map<string, MessageHandler> = new Map();
   private ws: WebSocket;
-  private workflowClient: ChatWorkflowClient;
+  private workflowClient: ChatWorkflowGateway;
 
-  constructor(ws: WebSocket, workflowClient: ChatWorkflowClient) {
+  constructor(ws: WebSocket, workflowClient: ChatWorkflowGateway) {
     this.ws = ws;
     this.workflowClient = workflowClient;
     this.registerHandlers();

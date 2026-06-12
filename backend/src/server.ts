@@ -3,6 +3,7 @@ import { loadConfig } from './utils/env';
 import { createTemporalClient } from './utils/temporal';
 import { createHttpRequestHandler } from './services/httpRouter';
 import { setupWebSocketServer } from './services/websocketServer';
+import { startSessionIdleSweeper } from './services/sessionIdleSweeper';
 import { ChatWorkflowClient } from './temporal/chatWorkflowClient';
 
 /**
@@ -21,7 +22,14 @@ async function main() {
 
   // 初始化 Temporal Client
   const temporalClient = await createTemporalClient(config.temporalAddress, config.temporalNamespace);
-  const workflowClient = new ChatWorkflowClient(temporalClient, config.temporalTaskQueue);
+  const workflowClient = new ChatWorkflowClient(
+    temporalClient,
+    config.temporalTaskQueue
+  );
+  startSessionIdleSweeper(workflowClient, {
+    idleTimeoutMs: config.temporalSessionIdleTimeoutMs,
+    sweepIntervalMs: config.temporalSessionIdleSweepIntervalMs,
+  });
 
   // 设置 WebSocket 服务器
   setupWebSocketServer(server, workflowClient);

@@ -1,4 +1,4 @@
-import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation } from '@temporalio/workflow';
+import { proxyActivities, defineSignal, defineUpdate, setHandler, continueAsNew, workflowInfo, condition, Trigger, CancellationScope, isCancellation, patched } from '@temporalio/workflow';
 import { Capability, SendMessageParams, SaveLedgerInput, StartSessionParams, QueueItem, ParsedLedgerProposalResult, SaveMessageArgs, InitializeSessionArgs, LedgerQueryRangeResult, LedgerEntryRow } from '../types';
 import * as ledger from '../utils/ledger';
 /**
@@ -20,6 +20,7 @@ const IDEMPOTENCY_CONFIG = {
   maxStateSizeBytes: 100000,
   duplicateMessage: '訊息已處理',
 } as const;
+const LEGACY_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 // ==================== Activity 介面定義 ====================
 interface ChatActivities {
@@ -49,11 +50,11 @@ const activities = proxyActivities<ChatActivities>({
     maximumInterval: '40s', // 最大間隔 40 秒
   }
 });
-// async generateReply
 
 // ==================== Update 和 Signal 定義 ====================
 const sendMessageUpdate = defineUpdate<string, [SendMessageParams]>('sendMessage');
 const cancelSignal = defineSignal('cancel');
+const closeSignal = defineSignal<[number]>('close');
 
 // ==================== Helper Classes ====================
 
@@ -153,12 +154,6 @@ class MessageQueue {
     return this.queue.length === 0;
   }
 
-  /**
-   * 獲取佇列長度
-   */
-  get length(): number {
-    return this.queue.length;
-  }
 }
 
 // Activity 封装外部服務的呼叫，由 Workflow 呼叫並推進流程
@@ -182,10 +177,6 @@ class ReplyGenerator {
       default:
         return activities.chatReply(message.text);
     }
-  }
-
-  private async handleWeather(message: QueueItem): Promise<string> {
-    return await activities.weatherReply(message.text);
   }
 
   private async handleLedgerProposal(message: QueueItem): Promise<string> {
@@ -235,10 +226,6 @@ class ReplyGenerator {
 
     // 3. 格式化輸出（純函數，在 Workflow 中執行）
     return ledger.formatLedgerSummary(entries, new Date(range.startMs), new Date(range.endMs));
-  }
-
-  private async handleChat(message: QueueItem): Promise<string> {
-    return await activities.chatReply(message.text);
   }
 }
 
@@ -354,7 +341,13 @@ class MessageProcessor {
 }
 
 // ==================== 工具函數 ====================
-function performContinueAsNew(idsToKeep: string[], sessionId: string, startedAtMs: number) {
+function performContinueAsNew(
+  idsToKeep: string[],
+  sessionId: string,
+  startedAtMs: number,
+  lastActivityMs: number,
+  idleTimeoutMs?: number
+) {
   const size = JSON.stringify(idsToKeep).length;
   if (size > IDEMPOTENCY_CONFIG.maxStateSizeBytes) {
     console.warn(`[ContinueAsNew] Large state: ${size} bytes`);
@@ -363,6 +356,8 @@ function performContinueAsNew(idsToKeep: string[], sessionId: string, startedAtM
   continueAsNew<typeof chatSessionWorkflow>({
     sessionId: sessionId,
     startedAtMs: startedAtMs,
+    lastActivityMs,
+    idleTimeoutMs,
     processedRequestIds: idsToKeep,
   });
 }
@@ -374,12 +369,31 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
   const messageQueue = new MessageQueue();
   const messageProcessor = new MessageProcessor(new ReplyGenerator());
   const cancellationManager = new CancellationManager();
+  const useExternalIdleClose = patched('external-session-idle-close-v1');
+  let lastActivityMs = startSessionParams.lastActivityMs ?? startSessionParams.startedAtMs;
+  let closeRequested = false;
+
+  const hasWorkflowEvent = () =>
+    closeRequested || !messageQueue.isEmpty() || workflowInfo().continueAsNewSuggested;
+
+  const waitForWorkflowEvent = async (): Promise<boolean> => {
+    if (useExternalIdleClose) {
+      await condition(hasWorkflowEvent);
+      return true;
+    }
+
+    return await condition(
+      hasWorkflowEvent,
+      startSessionParams.idleTimeoutMs ?? LEGACY_IDLE_TIMEOUT_MS
+    );
+  };
 
   // -------------------- Update Handler: 訊息處理 --------------------
   setHandler(sendMessageUpdate, async (params: SendMessageParams): Promise<string> => {
     const cached = idempotency.getCached(params.requestId);
     if (cached) return cached;
 
+    lastActivityMs = Math.max(lastActivityMs, params.startedAtMs);
     const completion = messageQueue.enqueue(params);
     const result = await completion;
     idempotency.putCached(params.requestId, result);
@@ -391,10 +405,22 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
     cancellationManager.cancel();
   });
 
+  // -------------------- Signal Handler: 關閉閒置 Session --------------------
+  setHandler(closeSignal, (cutoffMs: number) => {
+    if (lastActivityMs > cutoffMs) {
+      return;
+    }
+
+    closeRequested = true;
+    cancellationManager.cancel();
+  });
+
   // -------------------- 主事件循環 --------------------
   while (true) {
-    // 等待佇列有內容或需要 ContinueAsNew
-    await condition(() => !messageQueue.isEmpty() || workflowInfo().continueAsNewSuggested);
+    const hasWork = await waitForWorkflowEvent();
+    if ((!hasWork || closeRequested) && messageQueue.isEmpty()) {
+      return;
+    }
 
     // 處理佇列中的訊息
     while (!messageQueue.isEmpty()) {
@@ -408,10 +434,20 @@ export async function chatSessionWorkflow(startSessionParams: StartSessionParams
       }
     }
 
+    if (closeRequested) {
+      return;
+    }
+
     // 執行 ContinueAsNew
     if (workflowInfo().continueAsNewSuggested) {
       const idsToKeep = idempotency.getIdsForContinueAsNew();
-      performContinueAsNew(idsToKeep, startSessionParams.sessionId, startSessionParams.startedAtMs);
+      performContinueAsNew(
+        idsToKeep,
+        startSessionParams.sessionId,
+        startSessionParams.startedAtMs,
+        lastActivityMs,
+        startSessionParams.idleTimeoutMs
+      );
     }
   }
 }

@@ -3,6 +3,8 @@ import { Trigger } from '@temporalio/workflow';
 export interface StartSessionParams {
   sessionId: string;
   startedAtMs: number;
+  lastActivityMs?: number;
+  idleTimeoutMs?: number; // legacy: retained for workflows started before external idle close
   processedRequestIds?: string[]; // 幂等性：从 ContinueAsNew 传递的已处理 requestId
 }
 export interface ChatBase {
@@ -14,6 +16,11 @@ export interface SendMessageParams extends ChatBase {
   text: string;
   startedAtMs: number;
   requestId?: string; // 幂等性：请求唯一标识
+}
+
+export interface ChatWorkflowGateway {
+  sendMessage(params: SendMessageParams): Promise<string>;
+  cancelSession(sessionId: string): Promise<void>;
 }
 
 export interface QueueItem extends SendMessageParams {

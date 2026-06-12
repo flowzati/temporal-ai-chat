@@ -12,6 +12,7 @@ export interface SessionRow {
   title: string | null;
   created_at_ms: number;
   updated_at_ms: number;
+  closed_at_ms: number | null;
 }
 
 export interface MessageRow {
@@ -21,6 +22,12 @@ export interface MessageRow {
   content: string;
   created_at_ms: number;
   message_id?: string | null; // 幂等性：消息唯一标识
+}
+
+export interface IdleSessionRow {
+  session_id: string;
+  updated_at_ms: number;
+  closed_at_ms: number | null;
 }
 
 let dbInstance: Db | null = null;
@@ -49,7 +56,8 @@ function migrate(db: Db) {
       session_id TEXT PRIMARY KEY,
       title TEXT,
       created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL
+      updated_at_ms INTEGER NOT NULL,
+      closed_at_ms INTEGER
     );
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,15 +84,24 @@ function migrate(db: Db) {
     CREATE INDEX IF NOT EXISTS idx_ledger_user_occurred ON ledger_entries(user_id, occurred_at_ms);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_ledger_id ON ledger_entries(ledger_id) WHERE ledger_id IS NOT NULL;
   `);
+  ensureColumn(db, 'sessions', 'closed_at_ms', 'closed_at_ms INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_open_updated ON sessions(closed_at_ms, updated_at_ms)');
+}
+
+function ensureColumn(db: Db, tableName: string, columnName: string, columnDefinition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnDefinition}`);
+  }
 }
 
 export function upsertSession(sessionId: string, title: string | null, nowMs: number): void {
   const db = getDb();
   const existing = db.prepare('SELECT session_id FROM sessions WHERE session_id = ?').get(sessionId) as { session_id: string } | undefined;
   if (existing) {
-    db.prepare('UPDATE sessions SET title = COALESCE(?, title), updated_at_ms = ? WHERE session_id = ?').run(title, nowMs, sessionId);
+    db.prepare('UPDATE sessions SET title = COALESCE(?, title), updated_at_ms = ?, closed_at_ms = NULL WHERE session_id = ?').run(title, nowMs, sessionId);
   } else {
-    db.prepare('INSERT INTO sessions (session_id, title, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?)')
+    db.prepare('INSERT INTO sessions (session_id, title, created_at_ms, updated_at_ms, closed_at_ms) VALUES (?, ?, ?, ?, NULL)')
       .run(sessionId, title, nowMs, nowMs);
   }
 }
@@ -116,8 +133,23 @@ export function insertMessage(
 
 export function listSessions(limit = 50): SessionRow[] {
   const db = getDb();
-  return db.prepare('SELECT session_id, title, created_at_ms, updated_at_ms FROM sessions ORDER BY updated_at_ms DESC LIMIT ?')
+  return db.prepare('SELECT session_id, title, created_at_ms, updated_at_ms, closed_at_ms FROM sessions ORDER BY updated_at_ms DESC LIMIT ?')
     .all(limit) as SessionRow[];
+}
+
+export function listIdleOpenSessions(cutoffMs: number, limit = 100): IdleSessionRow[] {
+  const db = getDb();
+  return db.prepare(
+    'SELECT session_id, updated_at_ms, closed_at_ms FROM sessions WHERE closed_at_ms IS NULL AND updated_at_ms <= ? ORDER BY updated_at_ms ASC LIMIT ?'
+  ).all(cutoffMs, limit) as IdleSessionRow[];
+}
+
+export function markSessionClosed(sessionId: string, closedAtMs: number, cutoffMs: number): boolean {
+  const db = getDb();
+  const result = db.prepare(
+    'UPDATE sessions SET closed_at_ms = ? WHERE session_id = ? AND closed_at_ms IS NULL AND updated_at_ms <= ?'
+  ).run(closedAtMs, sessionId, cutoffMs);
+  return result.changes > 0;
 }
 
 export function getMessages(sessionId: string, limit = 500): MessageRow[] {
@@ -199,4 +231,3 @@ export function deleteLedgerEntry(entryId: number): boolean {
   const result = db.prepare('DELETE FROM ledger_entries WHERE id = ?').run(entryId);
   return result.changes > 0;
 }
-

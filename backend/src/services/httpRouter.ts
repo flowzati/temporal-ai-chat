@@ -1,5 +1,4 @@
 import http from 'http';
-import url from 'url';
 import * as db from '../utils/db';
 
 /**
@@ -70,9 +69,9 @@ function handleNotFound(res: http.ServerResponse): void {
  */
 export function createHttpRequestHandler(): http.RequestListener {
   return (req, res) => {
-    const parsed = req?.url ? url.parse(req.url, true) : { pathname: '' as string, query: {} as any };
+    const parsed = new URL(req.url ?? '/', 'http://localhost');
     const method = req?.method ?? 'GET';
-    const pathname = parsed.pathname ?? '';
+    const pathname = parsed.pathname;
 
     // 设置 CORS 响应头
     setCorsHeaders(res);
@@ -98,4 +97,3 @@ export function createHttpRequestHandler(): http.RequestListener {
     handleNotFound(res);
   };
 }
-

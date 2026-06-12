@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws';
 import http from 'http';
-import { ChatWorkflowClient } from '../temporal/chatWorkflowClient';
+import { ChatWorkflowGateway } from '../types';
 import { WebSocketRouter, startIdempotencyCacheCleanup } from './wsRouter';
 
 /**
@@ -8,7 +8,7 @@ import { WebSocketRouter, startIdempotencyCacheCleanup } from './wsRouter';
  */
 export function setupWebSocketServer(
   server: http.Server,
-  workflowClient: ChatWorkflowClient
+  workflowClient: ChatWorkflowGateway
 ): WebSocketServer {
   // 初始化 requestId 快取清理器（只执行一次）
   startIdempotencyCacheCleanup();
