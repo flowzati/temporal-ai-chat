@@ -53,6 +53,7 @@ export async function weatherReply(userMessage: string): Promise<string> {
   });
   const raw = String((await run(extractor, userMessage)).finalOutput || '').trim();
   let city = '';
+  console.log('[weatherReply] raw', raw);
   try {
     const parsed = CitySchema.safeParse(JSON.parse(raw));
     city = parsed.success ? parsed.data.city : '';

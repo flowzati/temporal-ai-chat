@@ -14,25 +14,22 @@ import * as ledger from '../utils/ledger';
  */
 
 // ==================== 常數配置 ====================
-const ACTIVITY_CONFIG = {
-  startToCloseTimeout: '1 minute',
-  retry: {
-    maximumAttempts: 5,
-    backoffCoefficient: 2
-  }
-} as const;
 
 const IDEMPOTENCY_CONFIG = {
   maxCachedRequestIds: 1000,
   maxStateSizeBytes: 100000,
-  duplicateMessage: '该消息已处理',
+  duplicateMessage: '訊息已處理',
 } as const;
 
 // ==================== Activity 介面定義 ====================
 interface ChatActivities {
+  // 決策能力：聊天、查天氣、記帳、查帳 (@openai/agents)
   decideCapability: (userMessage: string) => Promise<Capability>;
+  // 回覆能力：聊天 (@openai/agents)
   chatReply: (userMessage: string) => Promise<string>;
+  // 回覆能力：查天氣
   weatherReply: (userMessage: string) => Promise<string>;
+  // 回覆能力：記帳
   parseLedgerProposal: (args: SendMessageParams) => Promise<ParsedLedgerProposalResult>;
   parseLedgerQuery: (text: string) => Promise<LedgerQueryRangeResult>;
   getLedgerEntries: (params: { userId: string; startMs: number; endMs: number }) => Promise<LedgerEntryRow[]>;
@@ -42,7 +39,17 @@ interface ChatActivities {
   initializeSession: (params: InitializeSessionArgs) => Promise<void>;
 }
 
-const activities = proxyActivities<ChatActivities>(ACTIVITY_CONFIG);
+// SDK 代理 Activity 搭配開箱即用的 API 設定超時、重試機制
+const activities = proxyActivities<ChatActivities>({
+  startToCloseTimeout: '1 minute', // 活動執行時間上限 1 分鐘
+  retry: {
+    maximumAttempts: 3, // 最多重試 3 次
+    initialInterval: '5s', // 初始間隔 5 秒
+    backoffCoefficient: 2, // 指數退避 (5s, 10s, 20s)
+    maximumInterval: '40s', // 最大間隔 40 秒
+  }
+});
+// async generateReply
 
 // ==================== Update 和 Signal 定義 ====================
 const sendMessageUpdate = defineUpdate<string, [SendMessageParams]>('sendMessage');
@@ -154,17 +161,17 @@ class MessageQueue {
   }
 }
 
-/**
- * 能力處理器
- * 
- * 根據不同的能力類型生成對應的回覆。
- */
+// Activity 封装外部服務的呼叫，由 Workflow 呼叫並推進流程
+// 看到這邊的 Workflow 程式碼相當簡潔
+// 是因為剛剛在 Activity 已經設定了重試、超時規則
+// 並且由 Temporal Server 自動配合執行而得來的
 class ReplyGenerator {
   async generateReply(message: QueueItem): Promise<string> {
+    // 根據不同的能力類型生成對應的回覆：天氣、記帳、查帳、聊天
     const capability = await activities.decideCapability(message.text);
     switch (capability) {
       case 'weather':
-        return this.handleWeather(message);
+        return activities.weatherReply(message.text);
       case 'ledger_proposal':
         return this.handleLedgerProposal(message);
       case 'ledger_undo':
@@ -173,7 +180,7 @@ class ReplyGenerator {
         return this.handleLedgerQuery(message);
       case 'chat':
       default:
-        return this.handleChat(message);
+        return activities.chatReply(message.text);
     }
   }
 

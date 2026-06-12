@@ -6,9 +6,13 @@ import { WebSocketRouter, initializeRouter } from './wsRouter';
 /**
  * 创建并配置 WebSocket 服务器
  */
-export function setupWebSocketServer(server: http.Server, temporalClient: Client): WebSocketServer {
+export function setupWebSocketServer(
+  server: http.Server,
+  temporalClient: Client,
+  temporalTaskQueue: string
+): WebSocketServer {
   // 初始化全局路由器（只执行一次）
-  initializeRouter(temporalClient);
+  initializeRouter(temporalClient, temporalTaskQueue);
   
   const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -22,4 +26,3 @@ export function setupWebSocketServer(server: http.Server, temporalClient: Client
 
   return wss;
 }
-

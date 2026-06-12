@@ -22,7 +22,7 @@ async function main() {
   const temporalClient = await createTemporalClient(config.temporalAddress, config.temporalNamespace);
 
   // 设置 WebSocket 服务器
-  setupWebSocketServer(server, temporalClient);
+  setupWebSocketServer(server, temporalClient, config.temporalTaskQueue);
 
   // 启动服务器
   server.listen(config.port, () => {

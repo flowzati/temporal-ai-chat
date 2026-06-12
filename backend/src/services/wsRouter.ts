@@ -13,7 +13,6 @@ const MESSAGE_TYPES = {
 
 const WORKFLOW_CONFIG = {
   NAME: 'chatSessionWorkflow',
-  TASK_QUEUE: 'chat-ai',
   ID_PREFIX: 'chat-session-',
 } as const;
 
@@ -68,6 +67,7 @@ export type MessageHandler<T extends BaseMessage = BaseMessage> = (
 
 // ==================== 全局单例 ====================
 let globalTemporalClient: Client | null = null;
+let globalTemporalTaskQueue = 'chat-ai';
 const globalWorkflowCache = new Map<string, WorkflowHandle>();
 
 // 幂等性缓存：requestId -> { result, timestamp }
@@ -77,8 +77,9 @@ const IDEMPOTENCY_CACHE_TTL = 5 * 60 * 1000; // 5分钟过期
 /**
  * 初始化全局 Temporal Client（在服务器启动时调用一次）
  */
-export function initializeRouter(temporalClient: Client): void {
+export function initializeRouter(temporalClient: Client, temporalTaskQueue = 'chat-ai'): void {
   globalTemporalClient = temporalClient;
+  globalTemporalTaskQueue = temporalTaskQueue;
   
   // 定期清理过期的幂等性缓存
   setInterval(() => {
@@ -165,17 +166,18 @@ function getWorkflowHandle(sessionId: string): WorkflowHandle {
 }
 
 /**
- * 创建新的 workflow 实例
+ * 啟動建立新的 workflow
  */
 async function createWorkflow(
   sessionId: string,
   startedAtMs: number
 ): Promise<WorkflowHandle> {
   const workflowId = getWorkflowId(sessionId);
-  
+  // 1. 啟動新的 workflow 實例：taskQueue 由環境變數設定，workflowId 代表唯一標識
+  // 2. 對這個 workflow 實例送出訊息時，要使用同樣的 workflowId
   const handle = await globalTemporalClient!.workflow.start(WORKFLOW_CONFIG.NAME, {
     args: [{ sessionId, startedAtMs }],
-    taskQueue: WORKFLOW_CONFIG.TASK_QUEUE,
+    taskQueue: globalTemporalTaskQueue,
     workflowId,
   });
   
@@ -381,4 +383,3 @@ export class WebSocketRouter {
     }
   }
 }
-

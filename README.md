@@ -20,13 +20,25 @@ Create `.env` files based on the examples:
 PORT=4000
 TEMPORAL_ADDRESS=127.0.0.1:7233
 TEMPORAL_NAMESPACE=default
-OPENAI_API_KEY=sk-...
+TEMPORAL_TASK_QUEUE=chat-ai
+SQLITE_DB_PATH=./chat.db
+OPENAI_API_KEY=
 ```
 
 - Frontend: `frontend/.env.development` (optional; default is fine)
 ```
 VITE_WS_URL=ws://localhost:4000/ws
+VITE_API_URL=http://localhost:4000
 ```
+
+You can copy the committed examples to start:
+
+```bash
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env.development
+```
+
+Do not commit local `.env` files or SQLite database files (`*.db`, `*.db-shm`, `*.db-wal`).
 
 ### Install
 From the repo root:

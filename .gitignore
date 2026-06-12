@@ -4,8 +4,21 @@ node_modules
 .env
 **/.env
 **/.env.*
+!.env.example
+!**/.env.example
+
+# Local databases and SQLite sidecar files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
 dist
 build
 coverage
 .vscode
 .idea
+
+# Ignore Gradle project-specific cache directory
+.gradle
