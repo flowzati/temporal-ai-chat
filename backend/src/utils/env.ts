@@ -1,12 +1,13 @@
 import dotenv from 'dotenv';
+import path from 'path';
 
-dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../../..', '.env') });
 
 // 加載並驗證後端所需的環境變數
 // - PORT：伺服器監聽埠
 // - TEMPORAL_ADDRESS / TEMPORAL_NAMESPACE / TEMPORAL_TASK_QUEUE：Temporal 叢集連線
 // - OPENAI_API_KEY：OpenAI 金鑰（activities 會使用）
-// - SQLITE_DB_PATH：SQLite 檔案路徑（預設 ./chat.db）
+// - SQLITE_DB_PATH：SQLite 檔案路徑（相對路徑以 repo root 為基準，預設 ./backend/chat.db）
 export type AppConfig = {
   port: number; // 伺服器監聽的埠號
   temporalAddress: string; // Temporal 叢集位址 (host:port)
@@ -22,7 +23,10 @@ export function loadConfig(): AppConfig {
   const temporalNamespace = process.env.TEMPORAL_NAMESPACE ?? 'default';
   const temporalTaskQueue = process.env.TEMPORAL_TASK_QUEUE ?? 'chat-ai';
   const openaiApiKey = process.env.OPENAI_API_KEY ?? '';
-  const dbPath = process.env.SQLITE_DB_PATH ?? './chat.db';
+  const dbPathRaw = process.env.SQLITE_DB_PATH ?? './backend/chat.db';
+  const dbPath = path.isAbsolute(dbPathRaw)
+    ? dbPathRaw
+    : path.resolve(__dirname, '../../..', dbPathRaw);
 
   // 缺少金鑰直接拋錯，避免在執行時期才發生問題
   if (!openaiApiKey) {

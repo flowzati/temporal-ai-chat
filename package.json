@@ -7,11 +7,13 @@
     "frontend"
   ],
   "scripts": {
-    "start:backend": "npm run start -w backend",
-    "start:worker": "npm run start:worker -w backend",
+    "start:backend": "run-p start:server start:temporal-worker",
+    "start:server": "npm run start:server -w backend",
+    "start:worker": "npm run start:temporal-worker -w backend",
+    "start:temporal-worker": "npm run start:temporal-worker -w backend",
     "start:frontend": "npm run dev -w frontend",
     "start": "run-p start:backend start:frontend",
-    "start:all": "run-p start:backend start:worker start:frontend",
+    "start:all": "run-p start:backend start:frontend",
     "build": "npm run build -w backend && npm run build -w frontend"
   },
   "devDependencies": {

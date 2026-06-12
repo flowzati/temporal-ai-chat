@@ -5,10 +5,10 @@
 ```
 backend/src/
 │
-├── 📄 index.ts                          # 🎯 主入口（38 行）
-│   └── 职责：组合模块，启动服务器
+├── 📄 server.ts                         # HTTP/WebSocket server process
+│   └── 职责：组合模块，启动 API 与 WebSocket 服务器
 │
-├── 📄 worker.ts                         # Temporal Worker 入口
+├── 📄 temporalWorker.ts                 # Temporal worker process
 │   └── 职责：运行 Temporal 工作流
 │
 ├── 📄 types.ts                          # TypeScript 类型定义
@@ -66,8 +66,8 @@ backend/src/
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                      index.ts                           │
-│                   (主入口/组合层)                        │
+│                      server.ts                          │
+│              (HTTP/WebSocket process entrypoint)         │
 └─────────────────┬───────────────────┬───────────────────┘
                   │                   │
       ┌───────────▼──────────┐   ┌───▼──────────────────┐
@@ -219,4 +219,3 @@ temporal.ts:        █ 7 行
 **总行数**: 82 → 329 行（包含注释和更好的代码组织）
 
 **优势**: 虽然总行数增加，但每个文件职责单一，更易维护和测试！
-

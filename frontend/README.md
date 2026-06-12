@@ -79,7 +79,13 @@ npm run preview
 
 ## 環境變數
 
-在 `frontend/` 目錄建立 `.env.development`，或從 `frontend/.env.example` 複製：
+前端會從 repo root 的 `.env` 讀取 Vite 變數，與 backend 共用同一個設定檔。可從 root `.env.example` 複製：
+
+```bash
+cp .env.example .env
+```
+
+前端相關欄位：
 
 ```env
 VITE_WS_URL=ws://localhost:4000/ws

@@ -10,8 +10,8 @@
 
 ```
 backend/src/
-├── index.ts                    # 主入口：组合并启动服务器
-├── worker.ts                   # Temporal Worker 入口
+├── server.ts                   # HTTP/WebSocket server process
+├── temporalWorker.ts           # Temporal worker process
 ├── services/                   # 业务服务层
 │   ├── httpRouter.ts          # HTTP REST API 路由
 │   ├── websocketServer.ts     # WebSocket 服务器配置
@@ -30,8 +30,8 @@ backend/src/
 
 ### 模块职责
 
-#### 1. **index.ts** - 主入口
-- **职责**：组合各个模块，启动服务器
+#### 1. **server.ts** - HTTP/WebSocket server process
+- **职责**：组合各个模块，启动 HTTP/WebSocket 服务器
 - **特点**：简洁清晰，只有 ~40 行代码
 - **功能**：
   - 加载配置
@@ -40,7 +40,15 @@ backend/src/
   - 设置 WebSocket 服务器
   - 启动监听
 
-#### 2. **services/httpRouter.ts** - HTTP 路由
+#### 2. **temporalWorker.ts** - Temporal worker process
+- **职责**：启动 Temporal Worker，执行 workflow tasks 与 activities
+- **功能**：
+  - 加载配置
+  - 注册 workflows 与 activities
+  - 监听 configured task queue
+  - 长驻执行 Temporal 任务
+
+#### 3. **services/httpRouter.ts** - HTTP 路由
 - **职责**：处理 REST API 请求
 - **端点**：
   - `GET /api/sessions` - 获取会话列表
@@ -50,14 +58,14 @@ backend/src/
   - 统一错误处理
   - 清晰的函数分离
 
-#### 3. **services/websocketServer.ts** - WebSocket 配置
+#### 4. **services/websocketServer.ts** - WebSocket 配置
 - **职责**：设置 WebSocket 服务器
 - **功能**：
   - 创建 WebSocketServer 实例
   - 为每个连接创建路由器
   - 绑定消息处理
 
-#### 4. **services/wsRouter.ts** - WebSocket 路由器
+#### 5. **services/wsRouter.ts** - WebSocket 路由器
 - **职责**：分发 WebSocket 消息到对应处理器
 - **消息类型**：
   - `user_message` - 用户发送消息
@@ -134,4 +142,3 @@ Client → WS Router → Temporal Workflow → DB (ledger_entries) → Client
 1. 在 `temporal/workflows.ts` 中定义 workflow
 2. 在 `temporal/activities.ts` 中定义 activities
 3. 在路由器中调用 workflow
-

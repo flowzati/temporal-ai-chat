@@ -19,6 +19,23 @@ function isWorkflowNotFoundError(error: any): boolean {
   );
 }
 
+function hasWorkflowCompletedDuringUpdate(error: any): boolean {
+  let current = error;
+  while (current) {
+    const message = String(current.message ?? '');
+    const type = String(current.type ?? '');
+    if (
+      type === 'AcceptedUpdateCompletedWorkflow' ||
+      message.includes('Workflow completed before the Update completed') ||
+      message.includes('Workflow Update failed because the Workflow completed')
+    ) {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 export class ChatWorkflowClient {
   private workflowCache = new Map<string, WorkflowHandle>();
 
@@ -59,13 +76,15 @@ export class ChatWorkflowClient {
     sessionId: string,
     operation: (handle: WorkflowHandle) => Promise<T>
   ): Promise<T> {
+    const workflowId = this.getWorkflowId(sessionId);
     let handle = this.getWorkflowHandle(sessionId);
 
     try {
       return await operation(handle);
     } catch (error: any) {
-      if (isWorkflowNotFoundError(error)) {
-        console.log(`[ChatWorkflowClient] Workflow not found, creating: ${sessionId}`);
+      if (isWorkflowNotFoundError(error) || hasWorkflowCompletedDuringUpdate(error)) {
+        console.log(`[ChatWorkflowClient] Workflow unavailable, creating: ${sessionId}`);
+        this.workflowCache.delete(workflowId);
         handle = await this.startSessionWorkflow(sessionId, Date.now());
         return await operation(handle);
       }

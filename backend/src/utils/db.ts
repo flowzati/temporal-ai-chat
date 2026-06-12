@@ -97,6 +97,8 @@ export function insertMessage(
   messageId?: string | null
 ): void {
   const db = getDb();
+
+  upsertSession(sessionId, null, createdAtMs);
   
   // 幂等性检查：如果 messageId 存在且已有记录，则跳过插入
   if (messageId) {
@@ -197,5 +199,4 @@ export function deleteLedgerEntry(entryId: number): boolean {
   const result = db.prepare('DELETE FROM ledger_entries WHERE id = ?').run(entryId);
   return result.changes > 0;
 }
-
 

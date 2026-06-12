@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { Worker } from '@temporalio/worker';
 import * as activities from './temporal/activities';
 import { loadConfig } from './utils/env';
-// Worker：掛載 workflows 與 activities，負責執行工作流任務與活動呼叫
+// Temporal worker process：掛載 workflows 與 activities，負責執行工作流任務與活動呼叫
 
 async function run() {
   const { temporalTaskQueue } = loadConfig();

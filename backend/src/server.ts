@@ -6,7 +6,7 @@ import { setupWebSocketServer } from './services/websocketServer';
 import { ChatWorkflowClient } from './temporal/chatWorkflowClient';
 
 /**
- * 主程序：组合并启动 HTTP/WebSocket 服务器
+ * HTTP/WebSocket server process：组合并启动 API 与 WebSocket 服务器
  * 
  * 说明：
  * - HTTP REST API：提供 sessions / messages 读取（供前端载入历史）

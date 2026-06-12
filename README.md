@@ -13,32 +13,27 @@ A full-stack AI chat application using Temporal (with Search Attributes), OpenAI
 - OpenAI API key
 
 ### Environment
-Create `.env` files based on the examples:
+Create a root `.env` file based on the example:
 
-- Backend: `backend/.env` (create this file in your local dev environment)
+```bash
+cp .env.example .env
 ```
+
+Then fill in `OPENAI_API_KEY` and adjust any local endpoints:
+
+```env
 PORT=4000
 TEMPORAL_ADDRESS=127.0.0.1:7233
 TEMPORAL_NAMESPACE=default
 TEMPORAL_TASK_QUEUE=chat-ai
-SQLITE_DB_PATH=./chat.db
+SQLITE_DB_PATH=./backend/chat.db
 OPENAI_API_KEY=
-```
 
-- Frontend: `frontend/.env.development` (optional; default is fine)
-```
 VITE_WS_URL=ws://localhost:4000/ws
 VITE_API_URL=http://localhost:4000
 ```
 
-You can copy the committed examples to start:
-
-```bash
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env.development
-```
-
-Do not commit local `.env` files or SQLite database files (`*.db`, `*.db-shm`, `*.db-wal`).
+Both backend and frontend read this root `.env`. Do not commit local `.env` files or SQLite database files (`*.db`, `*.db-shm`, `*.db-wal`).
 
 ### Install
 From the repo root:
@@ -81,22 +76,31 @@ tctl --namespace default sa create --name StartedAt --type Datetime
 After registration, you can filter/search runs in Temporal Web by these attributes.
 
 ### Run (dev)
-- Start backend server and frontend together:
+- Start backend processes and frontend together:
 ```bash
 npm start
 ```
 
-- Start everything including the Temporal worker:
+- Start everything explicitly:
 ```bash
 npm run start:all
 ```
 
-- Start pieces individually:
+- Start both backend processes together:
 ```bash
 npm run start:backend
-npm run start:worker
+```
+
+- Start pieces individually:
+```bash
+npm run start:server
+npm run start:temporal-worker
 npm run start:frontend
 ```
+
+The backend entrypoints are named by process:
+- `backend/src/server.ts` starts the HTTP/WebSocket server.
+- `backend/src/temporalWorker.ts` starts the Temporal worker.
 
 Backend WebSocket endpoint: `ws://localhost:4000/ws`
 
