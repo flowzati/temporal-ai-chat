@@ -3,6 +3,7 @@ import { loadConfig } from './utils/env';
 import { createTemporalClient } from './utils/temporal';
 import { createHttpRequestHandler } from './services/httpRouter';
 import { setupWebSocketServer } from './services/websocketServer';
+import { ChatWorkflowClient } from './temporal/chatWorkflowClient';
 
 /**
  * 主程序：组合并启动 HTTP/WebSocket 服务器
@@ -20,9 +21,10 @@ async function main() {
 
   // 初始化 Temporal Client
   const temporalClient = await createTemporalClient(config.temporalAddress, config.temporalNamespace);
+  const workflowClient = new ChatWorkflowClient(temporalClient, config.temporalTaskQueue);
 
   // 设置 WebSocket 服务器
-  setupWebSocketServer(server, temporalClient, config.temporalTaskQueue);
+  setupWebSocketServer(server, workflowClient);
 
   // 启动服务器
   server.listen(config.port, () => {

@@ -1,7 +1,7 @@
-import { Client, WorkflowHandle } from '@temporalio/client';
 import WebSocket, { RawData } from 'ws';
 import { randomUUID } from 'crypto';
 import { SendMessageParams } from '../types';
+import { ChatWorkflowClient } from '../temporal/chatWorkflowClient';
 
 // ==================== 常量定义 ====================
 const MESSAGE_TYPES = {
@@ -9,11 +9,6 @@ const MESSAGE_TYPES = {
   CANCEL: 'cancel',
   ASSISTANT_MESSAGE: 'assistant_message',
   ERROR: 'error',
-} as const;
-
-const WORKFLOW_CONFIG = {
-  NAME: 'chatSessionWorkflow',
-  ID_PREFIX: 'chat-session-',
 } as const;
 
 // ==================== 类型定义 ====================
@@ -55,6 +50,7 @@ interface ErrorResponse {
 // Handler 上下文
 export interface MessageHandlerContext {
   ws: WebSocket;
+  workflowClient: ChatWorkflowClient;
   sendResponse: (response: AssistantMessageResponse | ErrorResponse) => void;
   sendError: (error: string, sessionId?: string) => void;
 }
@@ -65,23 +61,18 @@ export type MessageHandler<T extends BaseMessage = BaseMessage> = (
   context: MessageHandlerContext
 ) => Promise<void>;
 
-// ==================== 全局单例 ====================
-let globalTemporalClient: Client | null = null;
-let globalTemporalTaskQueue = 'chat-ai';
-const globalWorkflowCache = new Map<string, WorkflowHandle>();
-
 // 幂等性缓存：requestId -> { result, timestamp }
 const idempotencyCache = new Map<string, { result: string; timestamp: number }>();
 const IDEMPOTENCY_CACHE_TTL = 5 * 60 * 1000; // 5分钟过期
+let idempotencyCleanupStarted = false;
 
 /**
- * 初始化全局 Temporal Client（在服务器启动时调用一次）
+ * 啟動 requestId 快取清理器（在服务器启动时调用一次）
  */
-export function initializeRouter(temporalClient: Client, temporalTaskQueue = 'chat-ai'): void {
-  globalTemporalClient = temporalClient;
-  globalTemporalTaskQueue = temporalTaskQueue;
-  
-  // 定期清理过期的幂等性缓存
+export function startIdempotencyCacheCleanup(): void {
+  if (idempotencyCleanupStarted) return;
+  idempotencyCleanupStarted = true;
+
   setInterval(() => {
     const now = Date.now();
     for (const [requestId, record] of idempotencyCache.entries()) {
@@ -93,23 +84,6 @@ export function initializeRouter(temporalClient: Client, temporalTaskQueue = 'ch
 }
 
 // ==================== 工具函数 ====================
-/**
- * 生成 workflow ID
- */
-function getWorkflowId(sessionId: string): string {
-  return `${WORKFLOW_CONFIG.ID_PREFIX}${sessionId}`;
-}
-
-/**
- * 检查错误是否为 workflow 不存在
- */
-function isWorkflowNotFoundError(error: any): boolean {
-  return (
-    error.message?.includes('not found') ||
-    error.message?.includes('workflow execution already completed')
-  );
-}
-
 /**
  * 检查请求是否已处理（幂等性）
  */
@@ -148,62 +122,6 @@ function getOrGenSessionId(sessionId: string) {
     console.log(`[handleUserMessage] Created new session: ${sessionId}`);
   }
   return { sessionId, isNewSession };
-}
-
-/**
- * 获取 workflow handle（从缓存或创建新 handle）
- */
-function getWorkflowHandle(sessionId: string): WorkflowHandle {
-  const workflowId = getWorkflowId(sessionId);
-  
-  let handle = globalWorkflowCache.get(workflowId);
-  if (!handle) {
-    handle = globalTemporalClient!.workflow.getHandle(workflowId);
-    globalWorkflowCache.set(workflowId, handle);
-  }
-  
-  return handle;
-}
-
-/**
- * 啟動建立新的 workflow
- */
-async function createWorkflow(
-  sessionId: string,
-  startedAtMs: number
-): Promise<WorkflowHandle> {
-  const workflowId = getWorkflowId(sessionId);
-  // 1. 啟動新的 workflow 實例：taskQueue 由環境變數設定，workflowId 代表唯一標識
-  // 2. 對這個 workflow 實例送出訊息時，要使用同樣的 workflowId
-  const handle = await globalTemporalClient!.workflow.start(WORKFLOW_CONFIG.NAME, {
-    args: [{ sessionId, startedAtMs }],
-    taskQueue: globalTemporalTaskQueue,
-    workflowId,
-  });
-  
-  globalWorkflowCache.set(workflowId, handle);
-  return handle;
-}
-
-/**
- * 执行 workflow 操作（自动处理 workflow 不存在的情况）
- */
-async function executeWorkflowOperation<T>(
-  sessionId: string,
-  operation: (handle: WorkflowHandle) => Promise<T>
-): Promise<T> {
-  let handle = getWorkflowHandle(sessionId);
-  
-  try {
-    return await operation(handle);
-  } catch (error: any) {
-    if (isWorkflowNotFoundError(error)) {
-      console.log(`[executeWorkflowOperation] Workflow not found, creating: ${sessionId}`);
-      handle = await createWorkflow(sessionId, Date.now());
-      return await operation(handle);
-    }
-    throw error;
-  }
 }
 
 // ==================== 消息处理器 ====================
@@ -249,13 +167,7 @@ async function handleUserMessage(
       startedAtMs: Date.now(),
       requestId: data.requestId,
     };
-    const reply = await executeWorkflowOperation(sessionId, (handle) =>
-      handle.executeUpdate('sendMessage', {
-        args: [userMessage],
-        // Temporal 内置幂等性：使用 requestId 作为 updateId
-        ...(data.requestId && { updateId: data.requestId }),
-      })
-    ) as string;
+    const reply = await context.workflowClient.sendMessage(userMessage);
     
     // 缓存结果
     cacheIdempotencyResult(data.requestId, reply);
@@ -297,7 +209,7 @@ async function handleCancel(
   }
   
   try {
-    await executeWorkflowOperation(sessionId, (handle) => handle.signal('cancel'));
+    await context.workflowClient.cancelSession(sessionId);
     
     // 缓存结果（标记为已处理）
     cacheIdempotencyResult(data.requestId, 'cancelled');
@@ -317,12 +229,11 @@ async function handleCancel(
 export class WebSocketRouter {
   private handlers: Map<string, MessageHandler> = new Map();
   private ws: WebSocket;
+  private workflowClient: ChatWorkflowClient;
 
-  constructor(ws: WebSocket) {
-    if (!globalTemporalClient) {
-      throw new Error('Router not initialized. Call initializeRouter() first.');
-    }
+  constructor(ws: WebSocket, workflowClient: ChatWorkflowClient) {
     this.ws = ws;
+    this.workflowClient = workflowClient;
     this.registerHandlers();
   }
 
@@ -347,6 +258,7 @@ export class WebSocketRouter {
   private createContext(): MessageHandlerContext {
     return {
       ws: this.ws,
+      workflowClient: this.workflowClient,
       sendResponse: (response) => this.send(response),
       sendError: (error, sessionId) =>
         this.send({
